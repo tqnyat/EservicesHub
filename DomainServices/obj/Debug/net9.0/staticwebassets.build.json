@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "9pns6Gt+SljmUClz4NcEqBoWGsIQRTSRW+a68rU1Kx0=",
+  "Source": "DomainServices",
+  "BasePath": "_content/DomainServices",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}
