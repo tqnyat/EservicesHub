@@ -60,7 +60,7 @@ namespace DomainServices.Services
             return new Dictionary<string, object> { { "UserInfo", dt }, { "UserName", user.UserName } };
         }
 
-        public Dictionary<string, object> ILoadViewList(ClaimsPrincipal currentUser, ISession session)
+        public Dictionary<string, object> ILoadViewList(ClaimsPrincipal currentUser)
         {
             string queryText = "";
             string userFullName = "";

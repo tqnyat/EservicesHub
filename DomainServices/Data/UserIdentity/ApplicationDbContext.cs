@@ -6,7 +6,7 @@ namespace DomainServices.Data.UserIdentity
     public class ApplicationDbContext : IdentityDbContext<Users>
     {
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
-            : base(options)
+        : base(options)
         {
         }
 

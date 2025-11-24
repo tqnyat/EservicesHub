@@ -33,7 +33,6 @@ namespace DomainServices.Services
         private readonly IWebHostEnvironment _webHostEnvironment;
         private readonly UserManager<Users> _userManager;
         private readonly SignInManager<Users> _signInManager;
-        private readonly IAntiforgery _antiforgery;
         private readonly ILocalResourceService _localResourceService;
         private readonly DomainDBContext.DomainRepo _domainRepo;
 
@@ -48,12 +47,7 @@ namespace DomainServices.Services
             DomainDBContext.DomainRepo domainRepo,
             IWebHostEnvironment webHostEnvironment,
             UserManager<Users> userManager,
-            SignInManager<Users> signInManager,
-            IAntiforgery antiforgery
-            //HelperClass helperClass,
-            //INotificationSender notificationSender,
-            //UiDataHelper uiDataHelper,
-            //NotificationHelper notificationHelper
+            SignInManager<Users> signInManager
             )
         {
             _configuration = configuration;
@@ -64,11 +58,6 @@ namespace DomainServices.Services
             _webHostEnvironment = webHostEnvironment;
             _userManager = userManager;
             _signInManager = signInManager;
-            _antiforgery = antiforgery;
-            //_helperClass = helperClass;
-            //_notificationSender = notificationSender;
-            //_uiDataHelper = uiDataHelper;
-            //_notificationHelper = notificationHelper;
         }
         #endregion
 

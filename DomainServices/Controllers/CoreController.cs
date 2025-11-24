@@ -5,6 +5,7 @@ using Newtonsoft.Json;
 using OfficeOpenXml;
 using System.Data;
 using System.Drawing;
+using System.Security.Claims;
 
 namespace DomainServices.Controllers
 {
@@ -42,28 +43,12 @@ namespace DomainServices.Controllers
         }
 
 
-        [HttpGet]
-        [Route("LoadViewList")]
+        [Authorize]
+        [HttpGet("LoadViewList")]
         public IActionResult LoadViewList()
         {
-            try
-            {
-                if (User.Identity.IsAuthenticated)
-                {
-                    var sessionKey = HttpContext.Session.GetString("sessionKey");
-                    var userName = User.Identity.Name;
-                    if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                    {
-                        return BadRequest($"Invalid Session|{userName}");
-                    }
-                    return Ok(JsonConvert.SerializeObject(_coreService.ILoadViewList(this.User, HttpContext.Session)));
-                }
-                else return Ok("");
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
+            var user = HttpContext.User;
+            return Ok(_coreService.ILoadViewList(user));
         }
 
         [Authorize]

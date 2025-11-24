@@ -1,42 +1,126 @@
 ﻿using DomainServices.Data;
+using DomainServices.Data.Repository;
 using DomainServices.Data.UserIdentity;
+using DomainServices.Services;
+using DomainServices.Services.Interfaces;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using NLog.Web;
+using OpenIddict.Validation.AspNetCore;
+using static DomainServices.Data.Repository.DomainDBContext;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 🔹 Add EF Core + Identity
+string EncryptionKey = Environment.GetEnvironmentVariable("EncryptionKey");
+
+// Add controllers + swagger
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Connection string
+var connectionString = builder.Configuration.GetConnectionString("ApplicationDBContextConnection")
+    ?? throw new InvalidOperationException("Connection string not found.");
+
+connectionString = Encyption.Decrypt(connectionString, EncryptionKey);
+
+// ---------------------------
+// Register DbContexts
+// ---------------------------
+
+// Identity + OpenIddict tables exist ONLY in ApplicationDbContext
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("ApplicationDBContextConnection")));
-
-builder.Services.AddIdentity<Users, IdentityRole>()
-    .AddEntityFrameworkStores<ApplicationDbContext>()
-    .AddDefaultTokenProviders();
-
-// 🔹 Add authentication (JWT bearer or cookie)
-builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = "Bearer";
-    options.DefaultChallengeScheme = "Bearer";
-}).AddJwtBearer("Bearer", options =>
-{
-    options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
-    {
-        ValidateIssuer = false,
-        ValidateAudience = false,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = false
-    };
+    options.UseSqlServer(connectionString);
+    options.UseOpenIddict(); // Required for OpenIddict stores
 });
 
-// Add controllers
-builder.Services.AddControllers();
+// DomainServices data context — NO OpenIddict here
+builder.Services.AddDbContext<DomainDBContext>(options =>
+{
+    options.UseSqlServer(connectionString);
+});
 
+// ----------------------------------------
+// Register Identity for authentication
+// ----------------------------------------
+builder.Services.AddDefaultIdentity<Users>(options =>
+{
+    options.SignIn.RequireConfirmedAccount = false;
+})
+.AddEntityFrameworkStores<ApplicationDbContext>();
+
+// ----------------------------------------
+// Register Repositories & Services
+// ----------------------------------------
+builder.Services.AddScoped<ILocalResourceService, LocalResourceService>();
+builder.Services.AddScoped<LocalResourcesRepository>();
+builder.Services.AddScoped<CoreData>();
+builder.Services.AddScoped<CommonServices>();
+
+// ❗ If DomainRepo is a separate class, register properly
+builder.Services.AddScoped<DomainRepo>();
+
+builder.Services.AddScoped<CoreServices>();
+builder.Services.AddSingleton<IConfiguration>(builder.Configuration);
+
+// ----------------------------------------
+// NLog
+// ----------------------------------------
+builder.Logging.ClearProviders();
+builder.Logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
+builder.Host.ConfigureLogging(logging =>
+{
+    logging.ClearProviders();
+    logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
+}).UseNLog();
+
+// ----------------------------------------
+// OpenIddict Validation 
+// ----------------------------------------
+var authServerUrl = builder.Configuration.GetValue<string>("AuthServer");
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme =
+        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme =
+        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
+});
+
+builder.Services.AddOpenIddict()
+    .AddValidation(options =>
+    {
+        // URL of Project A — MUST END WITHOUT SLASH
+        options.SetIssuer(authServerUrl);
+
+        // The audience MUST match the client_id used when issuing the access token.
+        // This is your resource server name.
+        options.AddAudiences("colllecta_06_resource_server");
+
+        // Validation flows
+        options.UseSystemNetHttp();
+        options.UseAspNetCore();
+    });
+
+builder.Services.AddAuthorization();
+
+// ----------------------------------------
 var app = builder.Build();
 
+// Swagger for dev only
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// No need for static files in API unless needed
 app.MapControllers();
 
 app.Run();

@@ -7,7 +7,8 @@ namespace DomainServices.Data.Repository
 {
     public class DomainDBContext : DbContext
     {
-        public DomainDBContext(DbContextOptions<ApplicationDbContext> options) : base(options)
+        public DomainDBContext(DbContextOptions<DomainDBContext> options)
+        : base(options)
         {
         }
 
