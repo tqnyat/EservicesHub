@@ -1,34 +1,42 @@
 {
   "Version": 1,
-  "WorkspaceRootPath": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\",
+  "WorkspaceRootPath": "C:\\Workspace\\Tqnyat\\EservicesHub\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\services\\coreservices.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\services\\coreservices.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\services\\coreservices.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\controllers\\corecontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\controllers\\corecontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\controllers\\corecontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\data\\useridentity\\applicationdbcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
+      "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\properties\\launchsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
+      "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\properties\\launchsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\appsettings.development.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
+      "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\appsettings.development.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\data\\useridentity\\applicationdbcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\data\\useridentity\\applicationdbcontext.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\data\\repository\\domainrepo.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\data\\repository\\domainrepo.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\data\\repository\\domainrepo.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\services\\commonservices.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\workspace\\tqnyat\\eserviceshub\\domainservices\\services\\commonservices.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\services\\commonservices.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|c:\\users\\asus\\source\\repos\\domainservices\\domainservices\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
-      "RelativeMoniker": "D:0:0:{C6125CD0-7010-48A7-807E-15B1A1A3EA71}|DomainServices\\DomainServices.csproj|solutionrelative:domainservices\\appsettings.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
     }
   ],
   "DocumentGroupContainers": [
@@ -38,8 +46,16 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 17,
+          "SelectedChildIndex": 18,
           "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:128:0:{116d2292-e37d-41cd-a077-ebacac4c8cc4}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:128:0:{1fc202d4-d401-403c-9834-5b218574bb67}"
+            },
             {
               "$type": "Bookmark",
               "Name": "ST:129:0:{1fc202d4-d401-403c-9834-5b218574bb67}"
@@ -82,10 +98,6 @@
             },
             {
               "$type": "Bookmark",
-              "Name": "ST:128:0:{1fc202d4-d401-403c-9834-5b218574bb67}"
-            },
-            {
-              "$type": "Bookmark",
               "Name": "ST:137:0:{1fc202d4-d401-403c-9834-5b218574bb67}"
             },
             {
@@ -112,48 +124,34 @@
               "$type": "Document",
               "DocumentIndex": 0,
               "Title": "CoreServices.cs",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Services\\CoreServices.cs",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Services\\CoreServices.cs",
               "RelativeDocumentMoniker": "DomainServices\\Services\\CoreServices.cs",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Services\\CoreServices.cs",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Services\\CoreServices.cs",
               "RelativeToolTip": "DomainServices\\Services\\CoreServices.cs",
-              "ViewState": "AgIAACsAAAAAAAAAAAAWwDcAAAAuAAAAAAAAAA==",
+              "ViewState": "AgIAAC4AAAAAAAAAAAAAAEQAAAAuAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2025-11-23T05:38:44.826Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
-              "Title": "CoreController.cs",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Controllers\\CoreController.cs",
-              "RelativeDocumentMoniker": "DomainServices\\Controllers\\CoreController.cs",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Controllers\\CoreController.cs",
-              "RelativeToolTip": "DomainServices\\Controllers\\CoreController.cs",
-              "ViewState": "AgIAAA0AAAAAAAAAAAAAADIAAAAwAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-11-20T06:11:58.59Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 3,
+              "DocumentIndex": 6,
               "Title": "ApplicationDbContext.cs",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Data\\UserIdentity\\ApplicationDbContext.cs",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Data\\UserIdentity\\ApplicationDbContext.cs",
               "RelativeDocumentMoniker": "DomainServices\\Data\\UserIdentity\\ApplicationDbContext.cs",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Data\\UserIdentity\\ApplicationDbContext.cs",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Data\\UserIdentity\\ApplicationDbContext.cs",
               "RelativeToolTip": "DomainServices\\Data\\UserIdentity\\ApplicationDbContext.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAkAAAAJAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-11-20T06:10:59.686Z",
-              "EditorCaption": ""
+              "WhenOpened": "2025-11-20T06:10:59.686Z"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 4,
+              "DocumentIndex": 7,
               "Title": "DomainRepo.cs",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Data\\Repository\\DomainRepo.cs",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Data\\Repository\\DomainRepo.cs",
               "RelativeDocumentMoniker": "DomainServices\\Data\\Repository\\DomainRepo.cs",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Data\\Repository\\DomainRepo.cs",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Data\\Repository\\DomainRepo.cs",
               "RelativeToolTip": "DomainServices\\Data\\Repository\\DomainRepo.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAgAAAAFAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
@@ -161,11 +159,11 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 5,
+              "DocumentIndex": 8,
               "Title": "CommonServices.cs",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Services\\CommonServices.cs",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Services\\CommonServices.cs",
               "RelativeDocumentMoniker": "DomainServices\\Services\\CommonServices.cs",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Services\\CommonServices.cs",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Services\\CommonServices.cs",
               "RelativeToolTip": "DomainServices\\Services\\CommonServices.cs",
               "ViewState": "AgIAAGwAAAAAAAAAAAAuwLgAAAAnAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
@@ -173,27 +171,67 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 6,
+              "DocumentIndex": 2,
               "Title": "appsettings.json",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\appsettings.json",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\appsettings.json",
               "RelativeDocumentMoniker": "DomainServices\\appsettings.json",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\appsettings.json",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\appsettings.json",
               "RelativeToolTip": "DomainServices\\appsettings.json",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAYAAAAEAAAAAAAAAA==",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
-              "WhenOpened": "2025-11-19T05:40:20.874Z"
+              "WhenOpened": "2025-11-19T05:40:20.874Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "launchSettings.json",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Properties\\launchSettings.json",
+              "RelativeDocumentMoniker": "DomainServices\\Properties\\launchSettings.json",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Properties\\launchSettings.json",
+              "RelativeToolTip": "DomainServices\\Properties\\launchSettings.json",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAkAAAAZAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
+              "WhenOpened": "2025-11-24T06:43:24.133Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "Program.cs",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Program.cs",
+              "RelativeDocumentMoniker": "DomainServices\\Program.cs",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Program.cs",
+              "RelativeToolTip": "DomainServices\\Program.cs",
+              "ViewState": "AgIAAEYAAAAAAAAAAAAiwFEAAABGAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-11-13T09:03:37.06Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
               "DocumentIndex": 1,
-              "Title": "Program.cs",
-              "DocumentMoniker": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Program.cs",
-              "RelativeDocumentMoniker": "DomainServices\\Program.cs",
-              "ToolTip": "C:\\Users\\ASUS\\source\\repos\\DomainServices\\DomainServices\\Program.cs",
-              "RelativeToolTip": "DomainServices\\Program.cs",
-              "ViewState": "AgIAAF4AAAAAAAAAAAAQwGsAAAAAAAAAAAAAAA==",
+              "Title": "CoreController.cs",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Controllers\\CoreController.cs",
+              "RelativeDocumentMoniker": "DomainServices\\Controllers\\CoreController.cs",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\Controllers\\CoreController.cs",
+              "RelativeToolTip": "DomainServices\\Controllers\\CoreController.cs",
+              "ViewState": "AgIAAA0AAAAAAAAAAAAuwDEAAAAMAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-11-13T09:03:37.06Z",
+              "WhenOpened": "2025-11-20T06:11:58.59Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "appsettings.Development.json",
+              "DocumentMoniker": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\appsettings.Development.json",
+              "RelativeDocumentMoniker": "DomainServices\\appsettings.Development.json",
+              "ToolTip": "C:\\Workspace\\Tqnyat\\EservicesHub\\DomainServices\\appsettings.Development.json",
+              "RelativeToolTip": "DomainServices\\appsettings.Development.json",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
+              "WhenOpened": "2025-11-24T06:36:04.355Z",
               "EditorCaption": ""
             }
           ]

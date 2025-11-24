@@ -81,13 +81,6 @@ builder.Host.ConfigureLogging(logging =>
 // ----------------------------------------
 var authServerUrl = builder.Configuration.GetValue<string>("AuthServer");
 
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme =
-        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme =
-        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
-});
 
 builder.Services.AddOpenIddict()
     .AddValidation(options =>
@@ -97,12 +90,17 @@ builder.Services.AddOpenIddict()
 
         // The audience MUST match the client_id used when issuing the access token.
         // This is your resource server name.
-        options.AddAudiences("colllecta_06_resource_server");
+        options.AddEncryptionKey(new SymmetricSecurityKey(
+           Convert.FromBase64String("DRjd/GnduI3Efzen9V9BvbNUfc/VKgXltV7Kbk9sMkY=")));
 
-        // Validation flows
+        // Register the System.Net.Http integration.
         options.UseSystemNetHttp();
+
+        // Register the ASP.NET Core host.
         options.UseAspNetCore();
     });
+
+builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 
 builder.Services.AddAuthorization();
 
