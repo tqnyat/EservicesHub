@@ -1,19 +1,6 @@
-﻿namespace DomainServices.Models
+﻿namespace DomainServices.Models.Core
 {
-    public class Component
-    {
-        public string Name { get; set; } = "";
-        public string Title { get; set; } = "";
-        public string TableName { get; set; } = "";
-        public string OnCreateProc { get; set; } = "";
-        public string OnUpdateProc { get; set; } = "";
-        public string OnDeleteProc { get; set; } = "";
-        public string SearchSpec { get; set; } = "";
-        public string SortSpec { get; set; } = "";
-        public int PageSize { get; set; }
-        public int Type { get; set; }
-    }
-    public class ComponentFieldsDto
+    public class ListDetialDto
     {
         public int Id { get; set; }
         public DateTime Created { get; set; }
@@ -52,14 +39,13 @@
         // Extra: Parent Component Info (top of query)
         public string ComponentName { get; set; }
         public string ComponentTitle { get; set; }
-        public string? ComponentTable { get; set; }
-        public string? OnCreateProc { get; set; }
-        public string? OnDeleteProc { get; set; }
-        public string? OnUpdateProc { get; set; }
-        public string? SearchSpec { get; set; }
-        public string? Type { get; set; }
-        public string? SortSpec { get; set; }
         public int PageSize { get; set; }
 
     }
+    public class ListDetialResponse
+    {
+        public List<ListDetialDto> ListDetial { get; set; } = new List<ListDetialDto>();
+        
+    }
+
 }

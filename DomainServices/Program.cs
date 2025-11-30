@@ -68,13 +68,13 @@ builder.Services.AddSingleton<IConfiguration>(builder.Configuration);
 // ----------------------------------------
 // NLog
 // ----------------------------------------
-builder.Logging.ClearProviders();
-builder.Logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
-builder.Host.ConfigureLogging(logging =>
-{
-    logging.ClearProviders();
-    logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
-}).UseNLog();
+//builder.Logging.ClearProviders();
+//builder.Logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
+//builder.Host.ConfigureLogging(logging =>
+//{
+//    logging.ClearProviders();
+//    logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
+//}).UseNLog();
 
 // ----------------------------------------
 // OpenIddict Validation 

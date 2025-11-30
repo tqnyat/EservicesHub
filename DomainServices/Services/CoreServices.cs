@@ -1,6 +1,7 @@
 ﻿using DomainServices.Data;
 using DomainServices.Data.Repository;
 using DomainServices.Models;
+using DomainServices.Models.Core;
 using DomainServices.Services.Interfaces;
 using Ganss.Xss;
 using Microsoft.AspNetCore.Identity;
@@ -8,10 +9,14 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
+using NLog.Config;
+using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.Security.Claims;
+using System.Text;
 using System.Text.RegularExpressions;
+using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 using Component = DomainServices.Models.Component;
 
 
@@ -60,129 +65,265 @@ namespace DomainServices.Services
             return new Dictionary<string, object> { { "UserInfo", dt }, { "UserName", user.UserName } };
         }
 
-        public Dictionary<string, object> ILoadViewList(ClaimsPrincipal currentUser)
+        public async Task<GetUserViewsResponse> IGetUserViewsAsync(ClaimsPrincipal currentUser)
         {
-            string queryText = "";
-            string userFullName = "";
-            string applicationTheme = "";
-            DataTable dataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
-
             if (currentUser == null || !currentUser.Identity.IsAuthenticated)
             {
                 _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
             }
-            var user = _userManager.GetUserAsync(currentUser).Result;
-            userFullName = user.FirstName + " " + user.LastName;
-            applicationTheme = user.ApplicationTheme;
+            var username = currentUser.FindFirst("username").Value;
+            var user = await _userManager.FindByNameAsync(username);
 
-            queryText = " SELECT DISTINCT V.Id, V.Type, V.ViewStyle, V.Name, V.Title, V.ViewSequence, V.MainCategory, V.ViewIcon, PD.ReadOnly ";
-            queryText += " FROM RolePermissions RP, Permissions p, PermissionDetails pd, Views V ";
-            queryText += " Where RP.PermissionId = P.Id And P.Id = Pd.ParentId And PD.ViewId = V.Id And RP.RoleId = @RoleId ORDER BY ViewSequence ";
-            cmd.Parameters.AddWithValue("@RoleId", user.RoleId);
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
+            string userFullName = $"{user.FirstName} {user.LastName}";
+            string applicationTheme = user.ApplicationTheme;
 
-            // set localization resource name
-            foreach (DataRow row in dataTable.Rows)
+            string query = @"
+                SELECT DISTINCT 
+                    V.Id, 
+                    V.Type, 
+                    V.ViewStyle, 
+                    V.Name, 
+                    V.Title, 
+                    V.ViewSequence, 
+                    V.MainCategory, 
+                    V.ViewIcon, 
+                    PD.ReadOnly
+                FROM RolePermissions RP
+                INNER JOIN Permissions P ON RP.PermissionId = P.Id
+                INNER JOIN PermissionDetails PD ON P.Id = PD.ParentId
+                INNER JOIN Views V ON PD.ViewId = V.Id
+                WHERE RP.RoleId = @RoleId
+                ORDER BY V.ViewSequence;
+            ";
+
+            var list = new List<ViewListItemDto>();
+
+            using (SqlConnection conn = new SqlConnection(_commonServices.getConnectionString()))
+            using (SqlCommand cmd = new SqlCommand(query, conn))
             {
-                row["Title"] = _localResourceService.GetResource(row["Title"].ToString());
-            }
+                cmd.Parameters.Add("@RoleId", SqlDbType.Int).Value = user.RoleId;
 
-            return new Dictionary<string, object> { { "ListDetial", dataTable }, { "UserFullName", userFullName }, { "ApplicationTheme", applicationTheme } };
-        }
-
-        public Dictionary<string, object> ILoadView(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
-        {
-            string queryText = "";
-            string viewName = t["viewName"].ToString();
-            DataTable dataTable = new DataTable();
-            DataTable viewDataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
-
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-
-            var user = _userManager.GetUserAsync(currentUser).Result;
-            queryText = " Select DISTINCT Seq, V.ClientURL, V.Title ViewTitle , VC.ViewId, V.ViewStyle, VC.ViewDataAccess, C.Id CompId, C.Name CompName,C.Title CompTitle, VC.CompFieldId, VC.ParCompId, VC.ParCompFieldId, PD.ReadOnly, C.ExportExcel, VC.NoInsert, VC.NoUpdate, VC.NoDelete, "
-                + " (Select CF.Name FROM ComponentField CF WHERE VC.CompFieldId = CF.Id) CompFieldName, "
-                + " (Select PC.Name FROM Component PC WHERE VC.ParCompId = PC.Id) ParCompName, "
-                + " (Select PCF.Name FROM ComponentField PCF WHERE  VC.ParCompFieldId = PCF.Id) ParCompFieldName, "
-                + " ISNULL((SELECT TOP 1 1 FROM ViewComponent VCC WHERE VC.CompId = VCC.ParCompId AND ViewId = V.Id), 0) HasDetail "
-                + " From Views V, ViewComponent VC, Component C , RolePermissions RP, Permissions p, PermissionDetails pd "
-                + " Where V.Id = VC.ViewId And VC.CompId = C.Id And RP.PermissionId = P.Id And P.Id = Pd.ParentId And PD.ViewId = V.Id "
-                + " And V.Name = @ViewName AND RP.RoleId = @RoleId Order by Seq; ";
-            cmd.Parameters.AddWithValue("@ViewName", viewName);
-            cmd.Parameters.AddWithValue("@RoleId", user.RoleId);
-
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
-            var currentLang = System.Threading.Thread.CurrentThread.CurrentCulture.Name.ToLower();
-            var descColumnName = currentLang.Contains("ar") ? "DescriptionAr" : "DescriptionEn";
-            queryText = $"Select Top 1 {descColumnName} Description From Views where Name = @ViewName";
-            var description = _commonServices.ExecuteQuery_OneValue(queryText, cmd, _commonServices.getConnectionString());
-            // set localization resource name
-            foreach (DataRow row in dataTable.Rows)
-            {
-                row["ViewTitle"] = _localResourceService.GetResource(row["ViewTitle"].ToString());
-                row["CompTitle"] = _localResourceService.GetResource(row["CompTitle"].ToString());
-            }
-
-            _coreData.sharedVariable.View = dataTable;
-            _coreData.sharedVariable.View.Columns.Add("ParCompFieldValue", typeof(string));
-            _coreData.sharedVariable.View.Columns.Add("Fields", typeof(string));
-            _coreData.sharedVariable.View.Columns.Add("Component", typeof(string));
-            _coreData.sharedVariable.View.Columns.Add("QueryString", typeof(string));
-            _coreData.sharedVariable.View.Columns.Add("QueryStringCount", typeof(string));
-            _coreData.sharedVariable.View.Columns.Add("QueryStringCmd", typeof(byte[]));
-
-
-            _coreData.InitComponents();
-
-            // clear previous Component and Fields from Session
-            foreach (var sessionKey in session.Keys)
-            {
-                if (sessionKey.Contains("Fields"))
+                await conn.OpenAsync();
+                using (var reader = await cmd.ExecuteReaderAsync())
                 {
-                    session.Remove(sessionKey);
+                    while (await reader.ReadAsync())
+                    {
+                        var item = new ViewListItemDto
+                        {
+                            Id = reader.GetDecimal(reader.GetOrdinal("Id")),
+                            Type = reader.GetDecimal(reader.GetOrdinal("Type")),
+                            ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle"))
+                                ? (int?)null
+                                : reader.GetInt32(reader.GetOrdinal("ViewStyle")),
+                            Name = reader.GetString(reader.GetOrdinal("Name")),
+                            Title = _localResourceService.GetResource(reader.GetString(reader.GetOrdinal("Title"))),
+                            ViewSequence = reader.GetDecimal(reader.GetOrdinal("ViewSequence")),
+                            MainCategory = reader.IsDBNull(reader.GetOrdinal("MainCategory"))
+                                ? (decimal?)null
+                                : reader.GetDecimal(reader.GetOrdinal("MainCategory")),
+                            ViewIcon = reader.GetString(reader.GetOrdinal("ViewIcon")),
+                            ReadOnly = reader.GetBoolean(reader.GetOrdinal("ReadOnly"))
+                        };
+
+                        list.Add(item);
+                    }
                 }
             }
 
-            //set session
-            session.Set("CoreDataView", _commonServices.DataTableToByteArray(_coreData.sharedVariable.View));
-
-            return new Dictionary<string, object> { { "ListDetial", dataTable }, { "ViewDescription", description } };
+            return new GetUserViewsResponse
+            {
+                ListDetial = list,
+                UserFullName = userFullName,
+                ApplicationTheme = applicationTheme
+            };
         }
 
-        public object IGetTemplate(Dictionary<string, string> t, ClaimsPrincipal currentUser)
+        public async Task<LoadViewResponse> ILoadView(Dictionary<string, string> t, ClaimsPrincipal currentUser)
         {
-            var componentName = t["componentName"].ToString();
-            string queryText = "";
-            DataTable dataTable;
-            SqlCommand cmd = new SqlCommand();
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not authorized or session timeout", "401");
 
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
+            if (!t.TryGetValue("viewName", out var viewName) || string.IsNullOrWhiteSpace(viewName))
+                throw new Exception("viewName is required");
+            var username = currentUser.FindFirst("username").Value;
+            var user = await _userManager.FindByNameAsync(username);
+
+            var currentLang = Thread.CurrentThread.CurrentCulture.Name.ToLower();
+            var lang = currentLang.Contains("ar") ? "ar" : "en";
+
+            string sqlView = @"
+                SELECT DISTINCT 
+                    VC.Seq, V.ClientURL, V.Title AS ViewTitle, VC.ViewId, V.ViewStyle,
+                    VC.ViewDataAccess, C.Id AS CompId, C.Name AS CompName, C.Title AS CompTitle,
+                    VC.CompFieldId, VC.ParCompId, VC.ParCompFieldId,
+                    PD.ReadOnly, C.ExportExcel, VC.NoInsert, VC.NoUpdate, VC.NoDelete,
+                    CF.Name AS CompFieldName, PC.Name AS ParCompName, PCF.Name AS ParCompFieldName,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM ViewComponent VCC 
+                        WHERE VCC.ParCompId = VC.CompId AND VCC.ViewId = VC.ViewId
+                    ) THEN 1 ELSE 0 END AS HasDetail,
+                    CASE WHEN @Lang = 'ar' THEN V.DescriptionAr ELSE V.DescriptionEn END AS ViewDescription
+                FROM ViewComponent VC
+                JOIN Views V ON V.Id = VC.ViewId
+                JOIN Component C ON C.Id = VC.CompId
+                JOIN RolePermissions RP ON RP.RoleId = @RoleId
+                JOIN Permissions P ON P.Id = RP.PermissionId
+                JOIN PermissionDetails PD ON PD.ParentId = P.Id AND PD.ViewId = V.Id
+                LEFT JOIN ComponentField CF ON VC.CompFieldId = CF.Id
+                LEFT JOIN Component PC ON VC.ParCompId = PC.Id
+                LEFT JOIN ComponentField PCF ON VC.ParCompFieldId = PCF.Id
+                WHERE V.Name = @ViewName
+                ORDER BY VC.Seq;
+            ";
+
+            var list = new List<LoadViewListItemDto>();
+            string viewDescription = "";
+
+            using (var conn = new SqlConnection(_commonServices.getConnectionString()))
+            using (var cmd = new SqlCommand(sqlView, conn))
             {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
+                cmd.Parameters.AddWithValue("@RoleId", user.RoleId);
+                cmd.Parameters.AddWithValue("@ViewName", viewName);
+                cmd.Parameters.AddWithValue("@Lang", lang);
+
+                await conn.OpenAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    var item = new LoadViewListItemDto
+                    {
+                        Seq = reader.GetDecimal("Seq"),
+                        ClientURL = reader["ClientURL"]?.ToString() ?? "",
+                        ViewTitle = _localResourceService.GetResource(reader["ViewTitle"]?.ToString() ?? "") ?? "",
+                        ViewId = reader.GetDecimal("ViewId"),
+                        ViewStyle = reader.GetInt32("ViewStyle"),
+                        ViewDataAccess = reader.GetInt32("ViewDataAccess"),
+                        CompId = reader.GetDecimal("CompId"),
+                        CompName = reader["CompName"]?.ToString() ?? "",
+                        CompTitle = _localResourceService.GetResource(reader["CompTitle"]?.ToString() ?? "") ?? "",
+
+                        CompFieldId = reader["CompFieldId"] as decimal?,
+                        ParCompId = reader["ParCompId"] as decimal?,
+                        ParCompFieldId = reader["ParCompFieldId"] as decimal?,
+
+                        ReadOnly = reader.GetBoolean("ReadOnly"),
+                        ExportExcel = reader.GetBoolean("ExportExcel"),
+                        NoInsert = reader.GetBoolean("NoInsert"),
+                        NoUpdate = reader.GetBoolean("NoUpdate"),
+                        NoDelete = reader.GetBoolean("NoDelete"),
+
+                        CompFieldName = reader["CompFieldName"]?.ToString() ?? "",
+                        ParCompName = reader["ParCompName"]?.ToString() ?? "",
+                        ParCompFieldName = reader["ParCompFieldName"]?.ToString() ?? "",
+
+                        HasDetail = reader.GetInt32("HasDetail"),
+                        ViewDescription = reader["ViewDescription"]?.ToString() ?? ""
+                    };
+
+                    viewDescription = item.ViewDescription;
+                    list.Add(item);
+                }
             }
 
-            cmd.Parameters.Clear();
-            queryText = " Select Component.Name ComponentName, Component.Title ComponentTitle, Component.RowsCount PageSize, ";
-            queryText += "ComponentField.* From [dbo].[Component] , [dbo].[ComponentField]";
-            queryText += "Where Component.Id = ComponentField.ComponentId And Component.Name = @ComponentName Order By DisplaySequence";
-            cmd.Parameters.AddWithValue("@ComponentName", componentName);
+            var componentNames = list.Select(x => x.CompName).Distinct().ToList();
 
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
+            var componentMap = await LoadAllComponentDefinitions(componentNames);
 
-            // set localization resource name
-            foreach (DataRow row in dataTable.Rows)
+            // attach metadata
+            foreach (var item in list)
             {
-                row["ComponentTitle"] = _localResourceService.GetResource(row["ComponentTitle"].ToString());
-                row["Lable"] = _localResourceService.GetResource(row["Lable"].ToString());
-
+                if (componentMap.TryGetValue(item.CompName, out var def))
+                    item.Component = def;
             }
 
-            return new Dictionary<string, object> { { "ListDetial", dataTable } };
+            var json = JsonConvert.SerializeObject(list);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var base64 = Convert.ToBase64String(bytes);
+
+            return new LoadViewResponse
+            {
+                ListDetial = list,
+                ViewDescription =  viewDescription,
+                UpdatedSession =  new Dictionary<string, object> {
+                    { "CoreDataView", base64 }
+                }
+            };
+        }
+
+        public async Task<ListDetialResponse> IGetTemplate(Dictionary<string, string> t, ClaimsPrincipal currentUser)
+        {
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
+
+            if (!t.TryGetValue("componentName", out var componentName) || string.IsNullOrWhiteSpace(componentName))
+                throw new Exception("componentName is required");
+
+            string sql = @"
+                SELECT C.Name AS ComponentName, C.Title AS ComponentTitle, C.RowsCount AS PageSize, CF.*
+                FROM Component C
+                JOIN ComponentField CF ON C.Id = CF.ComponentId
+                WHERE C.Name = @ComponentName
+                ORDER BY CF.DisplaySequence;
+            ";
+
+            var list = new List<ListDetialDto>();
+
+            using (var conn = new SqlConnection(_commonServices.getConnectionString()))
+            using (var cmd = new SqlCommand(sql, conn))
+            {
+                cmd.Parameters.AddWithValue("@ComponentName", componentName);
+
+                await conn.OpenAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    var dto = new ListDetialDto
+                    {
+                        ComponentName = reader["ComponentName"]?.ToString() ?? "",
+                        ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? ""),
+                        PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
+
+                        Id = Convert.ToInt32(reader["Id"]),
+                        Created = Convert.ToDateTime(reader["Created"]),
+
+                        CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
+                        LastUpd = reader["LastUpd"] == DBNull.Value ? null : Convert.ToDateTime(reader["LastUpd"]),
+                        LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
+                        GroupId = reader["GroupId"] == DBNull.Value ? null : Convert.ToDecimal(reader["GroupId"]),
+
+                        Name = reader["Name"].ToString(),
+                        TableName = reader["TableName"] == DBNull.Value ? null : reader["TableName"].ToString(),
+                        Lable = _localResourceService.GetResource(reader["Lable"]?.ToString() ?? ""),
+                        ColumnName = reader["ColumnName"].ToString(),
+                        DataType = reader["DataType"].ToString(),
+                        DefaultValue = reader["DefaultValue"] == DBNull.Value ? null : reader["DefaultValue"].ToString(),
+
+                        Required = Convert.ToBoolean(reader["Required"]),
+                        ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
+                        DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
+                        DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
+                        Comment = reader["Comment"] == DBNull.Value ? null : reader["Comment"].ToString(),
+
+                        ComponentId = Convert.ToInt32(reader["ComponentId"]),
+                        DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
+
+                        IsCalc = Convert.ToBoolean(reader["IsCalc"]),
+                        CalcExpr = reader["CalcExpr"] == DBNull.Value ? null : reader["CalcExpr"].ToString(),
+                        HtmlStyle = reader["HtmlStyle"] == DBNull.Value ? null : reader["HtmlStyle"].ToString(),
+                        LookUp = reader["LookUp"] == DBNull.Value ? null : Convert.ToDecimal(reader["LookUp"]),
+                        ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
+                        DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
+                        FileDataColumn = reader["FileDataColumn"] == DBNull.Value ? null : reader["FileDataColumn"].ToString(),
+                        FieldSize = reader["FieldSize"] == DBNull.Value ? null : Convert.ToInt32(reader["FieldSize"])
+                    };
+
+                    list.Add(dto);
+                }
+            }
+
+            return new ListDetialResponse { ListDetial = list };
         }
 
         public async Task<object> ISubmitData(Dictionary<string, object> t, ClaimsPrincipal currentUser, ISession session)
@@ -218,13 +359,13 @@ namespace DomainServices.Services
             var component = new Component();
             var componentDetailList = new List<ComponentDetail>();
             DataRow[] dataRow;
-
+            List<LoadViewListItemDto> da = null;
             dataRow = coreDataView.Select("CompName = '" + componentName + "'");
             parentField = dataRow[0]["CompFieldName"].ToString();
             parentFieldValue = dataRow[0]["ParCompFieldValue"].ToString();
             var sessionFields = session.GetString("Fields" + componentName + selectedId);
             var fields = (sessionFields == null || t["selectedId"] == "-1") ?
-                _coreData.InitFields(coreDataView, componentName, selectedId, user) :
+                _coreData.InitFields(da, componentName, selectedId, user) :
                 JsonConvert.DeserializeObject<List<Fields>>(sessionFields);
             component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
 
@@ -470,56 +611,50 @@ namespace DomainServices.Services
             return new Dictionary<string, object> { { "RowId", rowId } };
         }
 
-        public object ILoadData(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
+        public async Task<LoadDataResultDto> ILoadData(LoadDataRequest t, ClaimsPrincipal currentUser)
         {
-            var componentName = t["componentName"].ToString();
-            session.SetString("ComponentName", componentName);
-            int pageNumber = t["pageNumber"] == "-1" ? -1 : Convert.ToInt32(t["pageNumber"]);
-            var activeRow = String.IsNullOrEmpty(t["selectedId"]) ? "-1" : t["selectedId"];
-            var search = JsonConvert.DeserializeObject<Dictionary<string, string>>(t["search"]);
-            int recordCount = 0;
-            var viewDataAccess = 1;
-            var queryDataAccess = "";
-            var queryText = "";
-            var querySearch = "";
-            var queryTextCount = "";
-            var tableColumns = "";
-            var appletDisable = "enable";
-            var parentField = "-1";
-            object parentFieldValue = "-1";
+            // -----------------------------------------------
+            // 1. Validate User
+            // -----------------------------------------------
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
+
+            string componentName = t.ComponentName;
+            int pageNumber = t.PageNumber.ToString() == "-1" ? -1 : Convert.ToInt32(t.PageNumber);
+            string activeRow = string.IsNullOrEmpty(t.SelectedId) ? "-1" : t.SelectedId;
+
+            var search = t.Search;
+            var username = currentUser.FindFirst("username").Value;
+            var user = _userManager.FindByNameAsync(username).Result;
+
+            // -----------------------------------------------
+            // 2. Decode CoreDataView (DTO list)
+            // -----------------------------------------------
+            string base64 = t.CoreDataView;
+            byte[] bytes = Convert.FromBase64String(base64);
+            string json = Encoding.UTF8.GetString(bytes);
+
+            var coreViewList =
+                JsonConvert.DeserializeObject<List<LoadViewListItemDto>>(json);
+
+            // -----------------------------------------------
+            // 3. Find the View Component
+            // -----------------------------------------------
+            var view = coreViewList.First(x => x.CompName == componentName);
+
+            var component = view.Component; // strongly typed
+            string parentField = view.CompFieldName ?? "";
+            string parentFieldValue = view.ParCompFieldValue ?? "";
+            int viewDataAccess = view.ViewDataAccess;
+
             string connectionString = _commonServices.getConnectionString();
 
-            DataTable dataTable = new DataTable();
-            DataRow[] dataRow;
-            SqlCommand cmd;
-            Component component = new Component();
-            ComponentDetail componentDetail;
-            List<ComponentDetail> componentDetailList = new List<ComponentDetail>();
+            // we will reuse this SqlCommand
+            SqlCommand cmd = new SqlCommand();
 
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-
-            var user = _userManager.GetUserAsync(currentUser).Result;
-
-            var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-            dataRow = coreDataView.Select("CompName = '" + componentName + "'");
-            viewDataAccess = Convert.ToInt32(dataRow[0]["ViewDataAccess"]);
-
-            queryText = dataRow[0]["QueryString"].ToString();
-            queryTextCount = dataRow[0]["QueryStringCount"].ToString();
-            cmd = _commonServices.GetSqlCommanFromByte(dataRow[0]["QueryStringCmd"] as byte[]);
-
-            if (cmd == null)
-            {
-                cmd = new SqlCommand();
-            }
-
-            component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
-            parentField = dataRow[0]["CompFieldName"].ToString();
-            parentFieldValue = dataRow[0]["ParCompFieldValue"].ToString();
-
+            // -----------------------------------------------
+            // 4. PAGE NUMBER CALCULATION
+            // -----------------------------------------------
             if (pageNumber == -1)
             {
                 var pageNumberQuery = "SELECT PageNumber FROM (SELECT((ROW_NUMBER() OVER(ORDER BY " + component.SortSpec + ")) / " + component.PageSize + ") +1 AS PageNumber, Id ";
@@ -534,6 +669,19 @@ namespace DomainServices.Services
                 pageNumber = pageNumber < 1 ? 1 : pageNumber;
             }
 
+            // -----------------------------------------------
+            // 5. IF QueryString empty → rebuild everything
+            // -----------------------------------------------
+            string queryText = view.QueryString;
+            string queryTextCount = view.QueryStringCount;
+
+            List<LoadDataFieldDto> componentFields = null;
+            string tableColumns = "";
+            string queryDataAccess = "";
+            string querySearch = "";
+            ComponentDetail componentDetail;
+            List<ComponentDetail> componentDetailList = new List<ComponentDetail>();
+
             if (queryText == "" || queryText == null || (search != null && search.Count() > 0) || activeRow == "-1")
             {
                 queryText = " Select C.Name ComponentName, C.Title ComponentTitle, C.TableName ComponentTable , C.RowsCount PageSize, C.OnCreateProc, C.OnUpdateProc, C.OnDeleteProc, C.SearchSpec, C.SortSpec, C.Type, ";
@@ -542,7 +690,68 @@ namespace DomainServices.Services
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@ComponentName", componentName);
 
-                dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
+                var fields = new List<ComponentFieldsDto>();
+
+                using var conn = new SqlConnection(_commonServices.getConnectionString());
+                cmd = new SqlCommand(queryText, conn);
+
+                cmd.Parameters.AddWithValue("@ComponentName", componentName);
+
+                await conn.OpenAsync();
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var dto = new ComponentFieldsDto
+                    {
+                        // 🎯 Component (C.*)
+                        ComponentName = reader["ComponentName"]?.ToString() ?? "",
+                        ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? ""),
+                        ComponentTable = reader["ComponentTable"] == DBNull.Value ? null : reader["ComponentTable"].ToString(),
+                        PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
+                        OnCreateProc = reader["OnCreateProc"] == DBNull.Value ? null : reader["OnCreateProc"].ToString(),
+                        OnUpdateProc = reader["OnUpdateProc"] == DBNull.Value ? null : reader["OnUpdateProc"].ToString(),
+                        OnDeleteProc = reader["OnDeleteProc"] == DBNull.Value ? null : reader["OnDeleteProc"].ToString(),
+                        SearchSpec = reader["SearchSpec"] == DBNull.Value ? null : reader["SearchSpec"].ToString(),
+                        SortSpec = reader["SortSpec"] == DBNull.Value ? null : reader["SortSpec"].ToString(),
+                        Type = reader["Type"] == DBNull.Value ? null : reader["Type"].ToString(),
+
+                        Id = Convert.ToInt32(reader["Id"]),
+                        Created = reader.GetDateTime(reader.GetOrdinal("Created")),
+                        CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
+                        LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
+                        LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
+                        GroupId = reader["GroupId"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("GroupId")),
+
+                        Name = reader["Name"]?.ToString(),
+                        TableName = reader["TableName"]?.ToString(),
+                        Lable = _localResourceService.GetResource(reader["Lable"]?.ToString() ?? ""),
+                        ColumnName = reader["ColumnName"]?.ToString(),
+                        DataType = reader["DataType"]?.ToString(),
+                        DefaultValue = reader["DefaultValue"]?.ToString(),
+
+                        Required = Convert.ToBoolean(reader["Required"]),
+                        ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
+                        DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
+                        DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
+
+                        Comment = reader["Comment"]?.ToString(),
+
+                        ComponentId = Convert.ToInt32(reader["ComponentId"]),
+                        DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
+
+                        IsCalc = Convert.ToBoolean(reader["IsCalc"]),
+                        CalcExpr = reader["CalcExpr"]?.ToString(),
+                        HtmlStyle = reader["HtmlStyle"]?.ToString(),
+                        LookUp = reader["LookUp"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("LookUp")),
+                        ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
+                        DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
+                        FileDataColumn = reader["FileDataColumn"]?.ToString(),
+                        FieldSize = reader["FieldSize"] == DBNull.Value ? null : reader.GetInt32(reader.GetOrdinal("FieldSize")),
+                    };
+
+                    fields.Add(dto);
+                }
 
                 cmd.Parameters.Clear();
 
@@ -553,23 +762,23 @@ namespace DomainServices.Services
                     component.TableName = tableName;
                 }
 
-                foreach (DataRow row in dataTable.Rows)
+                foreach (var field in fields)
                 {
 
                     componentDetail = new ComponentDetail();
-                    componentDetail.FieldName = row["Name"].ToString();
-                    componentDetail.TableName = row["TableName"].ToString();
+                    componentDetail.FieldName = field.Name.ToString();
+                    componentDetail.TableName = field.TableName.ToString();
                     // for transactions table 
                     componentDetail.TableName = (componentDetail.TableName.ToLower() == "transactions") ? component.TableName : componentDetail.TableName;
-                    componentDetail.TableColumn = row["ColumnName"].ToString();
-                    componentDetail.DataType = row["DataType"].ToString();
-                    componentDetail.ReadOnly = Convert.ToBoolean(row["ReadOnly"].ToString());
-                    componentDetail.Required = Convert.ToBoolean(row["Required"].ToString());
-                    componentDetail.DisplayInForm = Convert.ToBoolean(row["DisplayInForm"].ToString());
-                    componentDetail.DisplayInList = Convert.ToBoolean(row["DisplayInList"].ToString());
-                    componentDetail.IsCalc = Convert.ToBoolean(row["IsCalc"].ToString());
-                    componentDetail.CalcExpression = row["CalcExpr"].ToString();
-                    componentDetail.LookUp = (row["LookUp"] == null) ? "-1" : row["LookUp"].ToString();
+                    componentDetail.TableColumn = field.ColumnName.ToString();
+                    componentDetail.DataType = field.DataType.ToString();
+                    componentDetail.ReadOnly = Convert.ToBoolean(field.ReadOnly.ToString());
+                    componentDetail.Required = Convert.ToBoolean(field.Required.ToString());
+                    componentDetail.DisplayInForm = Convert.ToBoolean(field.DisplayInForm.ToString());
+                    componentDetail.DisplayInList = Convert.ToBoolean(field.DisplayInList.ToString());
+                    componentDetail.IsCalc = Convert.ToBoolean(field.IsCalc.ToString());
+                    componentDetail.CalcExpression = field.CalcExpr.ToString();
+                    componentDetail.LookUp = (field.LookUp == null) ? "-1" : field.LookUp.ToString();
                     componentDetailList.Add(componentDetail);
                     string tableWithColumn = "";
                     if (componentDetail.DisplayInList)
@@ -627,12 +836,12 @@ namespace DomainServices.Services
                     {
                         if (componentDetail.IsCalc)
                         {
-                            dataRow[0]["CompFieldName"] = componentDetail.CalcExpression;
+                            view.CompFieldName = componentDetail.CalcExpression;
                             parentField = componentDetail.CalcExpression;
                         }
                         else
                         {
-                            dataRow[0]["CompFieldName"] = componentDetail.TableColumn;
+                            view.CompFieldName = componentDetail.TableColumn;
                             parentField = componentDetail.TableName + "." + componentDetail.TableColumn;
                         }
                     }
@@ -648,49 +857,49 @@ namespace DomainServices.Services
                     queryDataAccess = " CreatedBy =  '" + user.Id + "' ";
                 }
 
-                if (search != null)
-                {
-                    foreach (var item in search)
-                    {
-                        string paramValue = item.Value;
-                        if (paramValue != "")
-                        {
-                            var key = item.Key;
-                            var dateFromTo = "";
-                            if (key.Contains("_From") || key.Contains("_To"))
-                            {
-                                key = key.Substring(0, key.IndexOf("_"));
-                                dateFromTo = (item.Key.Contains("_From")) ? "From" : "To";
-                            }
+                //if (search != null)
+                //{
+                //    foreach (var item in search)
+                //    {
+                //        string paramValue = item.Value;
+                //        if (paramValue != "")
+                //        {
+                //            var key = item.Key;
+                //            var dateFromTo = "";
+                //            if (key.Contains("_From") || key.Contains("_To"))
+                //            {
+                //                key = key.Substring(0, key.IndexOf("_"));
+                //                dateFromTo = (item.Key.Contains("_From")) ? "From" : "To";
+                //            }
 
-                            DataRow[] dr = dataTable.Select("Name = '" + key + "'");//name[0].ToString()
-                            querySearch += (querySearch != "") ? " AND " : "";
-                            querySearch += (dr[0]["IsCalc"].ToString() == "True") ? dr[0]["CalcExpr"] : dr[0]["TableName"].ToString() + "." + dr[0]["ColumnName"].ToString();
+                //            DataRow[] dr = dataTable.Select("Name = '" + key + "'");//name[0].ToString()
+                //            querySearch += (querySearch != "") ? " AND " : "";
+                //            querySearch += (dr[0]["IsCalc"].ToString() == "True") ? dr[0]["CalcExpr"] : dr[0]["TableName"].ToString() + "." + dr[0]["ColumnName"].ToString();
 
-                            if (dateFromTo != "")
-                            {
-                                querySearch += (dateFromTo == "From") ? " >= " : " <= ";
-                                querySearch += "@" + key + "_" + dateFromTo;
-                            }
-                            else
-                            {
-                                querySearch += ((dr[0]["DataType"].ToString().ToLower() == "text") ? " like @" : " = @") + key;
-                            }
+                //            if (dateFromTo != "")
+                //            {
+                //                querySearch += (dateFromTo == "From") ? " >= " : " <= ";
+                //                querySearch += "@" + key + "_" + dateFromTo;
+                //            }
+                //            else
+                //            {
+                //                querySearch += ((dr[0]["DataType"].ToString().ToLower() == "text") ? " like @" : " = @") + key;
+                //            }
 
-                            if (dr[0]["DataType"].ToString().ToLower() == "checkbox")
-                            {
-                                paramValue = (paramValue == "true") ? "1" : "0";
-                            }
+                //            if (dr[0]["DataType"].ToString().ToLower() == "checkbox")
+                //            {
+                //                paramValue = (paramValue == "true") ? "1" : "0";
+                //            }
 
 
-                            cmd.Parameters.AddWithValue(item.Key,
-                                (dr[0]["DataType"].ToString().ToLower() == "text") ? "%" + paramValue + "%"
-                                : (dateFromTo == "To") ? paramValue + " 23:59:59"
-                                : paramValue
-                                );
-                        }
-                    }
-                }
+                //            cmd.Parameters.AddWithValue(item.Key,
+                //                (dr[0]["DataType"].ToString().ToLower() == "text") ? "%" + paramValue + "%"
+                //                : (dateFromTo == "To") ? paramValue + " 23:59:59"
+                //                : paramValue
+                //                );
+                //        }
+                //    }
+                //}
 
                 /// this line has been added for the case when parent field value is a calc field
                 //parentField += parentFieldValue;
@@ -715,35 +924,48 @@ namespace DomainServices.Services
 
                 }
 
-                dataRow[0]["QueryString"] = queryText;
-                dataRow[0]["QueryStringCount"] = queryTextCount;
-                dataRow[0]["QueryStringCmd"] = _commonServices.ConvertSqlCommandToByte(cmd);
+                view.QueryString = queryText;
+                view.QueryStringCount = queryTextCount;
+                view.QueryStringCmd = Convert.ToBase64String(_commonServices.ConvertSqlCommandToByte(cmd));
             }
 
+            // -----------------------------------------------
+            // 6. Execute Query
+            // -----------------------------------------------
             cmd.Parameters.AddWithValue("@PageSize", component.PageSize);
             cmd.Parameters.AddWithValue("@PageNumber", pageNumber);
 
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, connectionString, CommandType.Text);
+            var listDetial =
+                _commonServices.ExecuteListDictionary(queryText, cmd, connectionString);
 
-            cmd.Parameters.RemoveAt("@PageSize");
-            cmd.Parameters.RemoveAt("@PageNumber");
+            int recordCount = Convert.ToInt32(
+                _commonServices.ExecuteQuery_OneValue(queryTextCount, cmd, connectionString)
+            );
 
-            recordCount = Convert.ToInt32(_commonServices.ExecuteQuery_OneValue(queryTextCount, cmd, connectionString));
+            string appletDisable =
+                string.IsNullOrEmpty(parentFieldValue) || parentFieldValue == "0"
+                ? "disable"
+                : "enable";
 
+            // -----------------------------------------------
+            // 7. Save Updated CoreDataView (DTO)
+            // -----------------------------------------------
+            string updatedJson = JsonConvert.SerializeObject(coreViewList);
+            string updatedBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(updatedJson));
 
-            if (parentField != "" && (parentFieldValue.ToString() == "0" || String.IsNullOrEmpty(parentFieldValue.ToString())))
+            return new LoadDataResultDto
             {
-                appletDisable = "disable";
-            }
-            session.Set("CoreDataView", _commonServices.DataTableToByteArray(coreDataView));
-
-            return new Dictionary<string, object> {
-                { "ListDetial", dataTable },
-                { "RecordCount", recordCount },
-                { "PageSize", component.PageSize },
-                { "AppletDisable", appletDisable } };
+                ListDetial = listDetial,
+                RecordCount = recordCount,
+                PageSize = component.PageSize,
+                AppletDisable = appletDisable,
+                UpdatedSession = new Dictionary<string, object>
+                {
+                    { "CoreDataView", updatedBase64 }
+                }
+            };
         }
-
+        
         public object ILoadDetailData(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
         {
             var componentName = t["componentName"].ToString();
@@ -811,30 +1033,78 @@ namespace DomainServices.Services
             return new Dictionary<string, object> { { "ListDetial", dt } };
         }
 
-        public object IEditRowData(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
+        public async Task<EditRowResultDto> IEditRowData(EditRowRequest t, ClaimsPrincipal currentUser)
         {
-            var componentName = t["componentName"].ToString();
-            var activeRow = t["selectedId"].ToString();
-            DataRow[] dataRow;
-
             if (currentUser == null || !currentUser.Identity.IsAuthenticated)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
+
+            string componentName = "CompanyUsers";
+            string selectedId = "-1";
+
+            // -----------------------------
+            // 1. Load CoreDataView (DTO list)
+            // -----------------------------
+            var coreViewBase64 = t.CoreDataView;
+            var coreJson = Encoding.UTF8.GetString(Convert.FromBase64String(coreViewBase64));
+            var coreViewList = JsonConvert.DeserializeObject<List<LoadViewListItemDto>>(coreJson);
+
+            // -----------------------------
+            // 2. Load Fields cache
+            // -----------------------------
+            var fieldsCacheJson = t.FieldsCache ?? "[]";
+
+            // FIX: handle [] or empty JSON safely
+            Dictionary<string, List<Fields>> fieldsCache;
+
+            if (string.IsNullOrWhiteSpace(fieldsCacheJson) ||
+                fieldsCacheJson.TrimStart().StartsWith("["))
             {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
+                // Means it's [] → cannot be deserialized into Dictionary
+                fieldsCache = new Dictionary<string, List<Fields>>();
+            }
+            else
+            {
+                fieldsCache = JsonConvert.DeserializeObject<Dictionary<string, List<Fields>>>(fieldsCacheJson)
+                              ?? new Dictionary<string, List<Fields>>();
             }
 
-            var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-            var sessionFields = session.GetString("Fields" + componentName + activeRow);
-            Users user = _userManager.GetUserAsync(currentUser).Result;
 
-            var fields = (sessionFields == null || t["selectedId"] == "-1") ?
-                _coreData.InitFields(coreDataView, componentName, activeRow, user) :
-                JsonConvert.DeserializeObject<List<Fields>>(sessionFields);
+            var key = componentName + selectedId;
+            var username = currentUser.FindFirst("username")?.Value;
+            var user = _userManager.FindByNameAsync(username).Result;
 
-            var sessionKey = "Fields" + componentName + activeRow;
-            session.SetString(sessionKey, JsonConvert.SerializeObject(fields));
+            // -----------------------------
+            // 3. Validate & prepare Fields
+            // -----------------------------
+            List<Fields> fields;
 
-            return new Dictionary<string, object> { { "ListDetial", fields } };
+            if (!fieldsCache.TryGetValue(key, out fields))
+            {
+                fields = _coreData.InitFields(coreViewList, componentName, selectedId, user);
+                fieldsCache[key] = fields;
+            }
+
+            // -----------------------------
+            // 4. Return + update session
+            // -----------------------------
+            var updatedCoreBase64 = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(coreViewList)));
+
+            var updatedFieldsJson =
+                JsonConvert.SerializeObject(fieldsCache);
+
+            return new EditRowResultDto
+            {
+                ListDetial = fields,
+
+                UpdatedSession = new Dictionary<string, object>
+                {
+                    { "CoreDataView", updatedCoreBase64 },
+                    { "FieldsCache", updatedFieldsJson }
+                }
+            };
         }
+
 
         public object IDeleteRowData(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
         {
@@ -1489,5 +1759,60 @@ namespace DomainServices.Services
         }
 
         #endregion
+        private async Task<Dictionary<string, Component>> LoadAllComponentDefinitions(List<string> names)
+        {
+            if (names == null || names.Count == 0)
+                return new Dictionary<string, Component>();
+
+            var result = new Dictionary<string, Component>();
+
+            string sql = $@"
+        SELECT 
+            Name,
+            Title,
+            TableName,
+            RowsCount AS PageSize,
+            OnCreateProc,
+            OnUpdateProc,
+            OnDeleteProc,
+            SearchSpec,
+            SortSpec,
+            Type
+        FROM Component
+        WHERE Name IN ({string.Join(",", names.Select((n, i) => $"@n{i}"))})
+    ";
+
+            using (var conn = new SqlConnection(_commonServices.getConnectionString()))
+            using (var cmd = new SqlCommand(sql, conn))
+            {
+                for (int i = 0; i < names.Count; i++)
+                    cmd.Parameters.AddWithValue($"@n{i}", names[i]);
+
+                await conn.OpenAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    var def = new Component
+                    {
+                        Name = reader["Name"].ToString(),
+                        Title = reader["Title"].ToString(),
+                        TableName = reader["TableName"].ToString(),
+                        PageSize = Convert.ToInt32(reader["PageSize"]),
+                        OnCreateProc = reader["OnCreateProc"].ToString(),
+                        OnUpdateProc = reader["OnUpdateProc"].ToString(),
+                        OnDeleteProc = reader["OnDeleteProc"].ToString(),
+                        SearchSpec = reader["SearchSpec"].ToString(),
+                        SortSpec = (reader["SortSpec"].ToString() == "" ? "Id DESC" : reader["SortSpec"].ToString()),
+                        Type = Convert.ToInt32(reader["Type"])
+                    };
+
+                    result[def.Name] = def;
+                }
+            }
+
+            return result;
+        }
+
     }
 }

@@ -1,6 +1,7 @@
 ﻿using DomainServices.Data;
 using DomainServices.Data.Repository;
 using DomainServices.Models;
+using DomainServices.Models.Core;
 using DomainServices.Services.Interfaces;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Identity;
@@ -829,7 +830,86 @@ namespace DomainServices.Services
             }
             return false;
         }
+        public List<Dictionary<string, object>> ExecuteListDictionary(string sql, SqlCommand cmd, string connectionString)
+        {
+            var result = new List<Dictionary<string, object>>();
 
+            using (var conn = new SqlConnection(connectionString))
+            {
+                cmd.Connection = conn;
+                cmd.CommandText = sql;
+
+                conn.Open();
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var row = new Dictionary<string, object>();
+
+                        for (int i = 0; i < reader.FieldCount; i++)
+                        {
+                            string col = reader.GetName(i);
+                            object val = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                            row[col] = val;
+                        }
+
+                        result.Add(row);
+                    }
+                }
+            }
+
+            return result;
+        }
+        public string BuildSqlColumn(string expr, LoadDataFieldDto f)
+        {
+            return f.DataType switch
+            {
+                "Date" => $"convert(varchar, {expr}, 20) {f.FieldName},",
+                "DateTime" => $"CONVERT(VARCHAR, FORMAT({expr}, 'dd/MM/yyyy hh:mm tt')) {f.FieldName},",
+                "Time" => $"CONVERT(VARCHAR, FORMAT({expr}, 'hh:mm tt')) {f.FieldName},",
+                "Color" => $"{expr} color_{f.FieldName},",
+                "CheckBox" => $"{expr} check_{f.FieldName},",
+                "Decimal" => $"{expr} decimal_{f.FieldName},",
+                "InnerButton" => $"{expr} button_{f.FieldName},",
+                "Button" => $"{expr} button_{f.FieldName},",
+                "File" => $"{expr} file_{f.FieldName},",
+                _ => $"{expr} {f.FieldName},"
+            };
+        }
+        public string BuildSqlSearch(KeyValuePair<string, string> item, LoadDataFieldDto f, SqlCommand cmd)
+        {
+            string key = item.Key;
+            string val = item.Value;
+
+            bool isDate = key.EndsWith("_From") || key.EndsWith("_To");
+            string baseKey = isDate ? key.Split('_')[0] : key;
+
+            string column = f.IsCalc ? f.CalcExpression : $"{f.TableName}.{f.TableColumn}";
+            string sql = "";
+
+            if (isDate)
+            {
+                sql = $"{column} {(key.EndsWith("_From") ? ">=" : "<=")} @{key}";
+                cmd.Parameters.AddWithValue($"@{key}", val);
+            }
+            else if (f.DataType.ToLower() == "text")
+            {
+                sql = $"{column} LIKE @{key}";
+                cmd.Parameters.AddWithValue($"@{key}", $"%{val}%");
+            }
+            else if (f.DataType.ToLower() == "checkbox")
+            {
+                sql = $"{column} = @{key}";
+                cmd.Parameters.AddWithValue($"@{key}", val == "true" ? "1" : "0");
+            }
+            else
+            {
+                sql = $"{column} = @{key}";
+                cmd.Parameters.AddWithValue($"@{key}", val);
+            }
+
+            return (sql + " AND ");
+        }
         #endregion
     }
 }

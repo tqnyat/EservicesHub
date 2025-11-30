@@ -1,9 +1,12 @@
 ﻿using DomainServices.Data;
 using DomainServices.Models;
+using DomainServices.Models.Core;
+using DomainServices.Services.Interfaces;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
 using System.ComponentModel;
 using System.Data;
+using System.Threading.Tasks;
 using Component = DomainServices.Models.Component;
 
 namespace DomainServices.Services
@@ -63,7 +66,7 @@ namespace DomainServices.Services
             }
         }
 
-        public List<Fields> InitFields(DataTable coreDataView, string componentName, string activeRow, Users user)
+        public async Task<List<Fields>> InitFields(List<LoadViewListItemDto> coreDataView, string componentName, string activeRow, Users user)
         {
             var queryText = "";
             var tableColumns = "";
@@ -72,35 +75,35 @@ namespace DomainServices.Services
 
             // define objects
             SqlCommand cmd = new SqlCommand();
-            DataRow[] dataRow;
-            dataRow = coreDataView.Select("CompName = '" + componentName + "'");
-
-            var component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
+            var dataRow = coreDataView.First(x => x.CompName == componentName);
+            var componentJson = dataRow.Component?.ToString() ?? "";
+            Console.WriteLine("componentJson = " + componentJson);
+            var component = dataRow.Component;
 
             var Fields = new List<Fields>();
-            var dataTable = GetComponentFields(componentName);
+            var dataTable = await GetComponentFields(componentName);
 
-            foreach (DataRow row in dataTable.Rows)
+            foreach (var row in dataTable)
             {
                 var field = new Fields
                 {
-                    Name = row["Name"].ToString(),
-                    ColumnName = row["ColumnName"].ToString(),
+                    Name = row.Name.ToString(),
+                    ColumnName = row.ColumnName.ToString(),
                     //Value = row["DefaultValue"].ToString(),
-                    DefaultValue = row["DefaultValue"].ToString(),
-                    Visible = Convert.ToBoolean(row["DisplayInForm"].ToString()),
-                    ReadOnly = Convert.ToBoolean(row["ReadOnly"].ToString()),
-                    Required = Convert.ToBoolean(row["Required"].ToString()),
-                    Type = row["DataType"].ToString(),
-                    LookUpQuery = row["LookUp"].ToString(),
+                    DefaultValue = row.DefaultValue.ToString(),
+                    Visible = Convert.ToBoolean(row.DisplayInForm.ToString()),
+                    ReadOnly = Convert.ToBoolean(row.ReadOnly.ToString()),
+                    Required = Convert.ToBoolean(row.Required.ToString()),
+                    Type = row.DataType.ToString(),
+                    LookUpQuery = row.LookUp.ToString(),
                     LookUpValues = null,
-                    ImmediatePost = Convert.ToBoolean(row["ImmediatePost"].ToString()),
-                    DisplayInPopup = Convert.ToBoolean(row["DisplayInPopup"].ToString()),
-                    IsCalc = Convert.ToBoolean(row["IsCalc"].ToString()),
-                    CalcExpr = row["CalcExpr"].ToString(),
-                    FileDataColumn = row["FileDataColumn"].ToString(),
+                    ImmediatePost = Convert.ToBoolean(row.ImmediatePost.ToString()),
+                    DisplayInPopup = Convert.ToBoolean(row.DisplayInPopup.ToString()),
+                    IsCalc = Convert.ToBoolean(row.IsCalc.ToString()),
+                    CalcExpr = row.CalcExpr.ToString(),
+                    FileDataColumn = row.FileDataColumn.ToString(),
                     FileDataValue = "",
-                    FieldSize = (row["FieldSize"] == DBNull.Value || row["FieldSize"] == "") ? 12 : Convert.ToInt32(row["FieldSize"])
+                    FieldSize = (row.FieldSize == null) ? 12 : Convert.ToInt32(row.FieldSize)
                 };
 
                 if (field.LookUpQuery != "")
@@ -265,7 +268,7 @@ namespace DomainServices.Services
             return queryText;
         }
 
-        public DataTable GetComponentFields(string componentName)
+        public async Task<List<ComponentFieldsDto>> GetComponentFields(string componentName)
         {
             SqlCommand cmd = new SqlCommand();
             var queryText = "Select Component.Name ComponentName, Component.Title ComponentTitle, Component.TableName ComponentTable, Component.RowsCount PageSize, ComponentField.* " +
@@ -273,8 +276,60 @@ namespace DomainServices.Services
                     "Where Component.Id = ComponentField.ComponentId And Component.Name = @ComponentName" +
                     " Order by DefaultValue ";
             cmd.Parameters.AddWithValue("@ComponentName", componentName);
+            var dataTable = new List<ComponentFieldsDto>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var dto = new ComponentFieldsDto
+                {
+                    // 🎯 Component (C.*)
+                    ComponentName = reader["ComponentName"]?.ToString() ?? "",
+                    ComponentTitle = reader["ComponentTitle"]?.ToString() ?? "",
+                    ComponentTable = reader["ComponentTable"] == DBNull.Value ? null : reader["ComponentTable"].ToString(),
+                    PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
+                    OnCreateProc = reader["OnCreateProc"] == DBNull.Value ? null : reader["OnCreateProc"].ToString(),
+                    OnUpdateProc = reader["OnUpdateProc"] == DBNull.Value ? null : reader["OnUpdateProc"].ToString(),
+                    OnDeleteProc = reader["OnDeleteProc"] == DBNull.Value ? null : reader["OnDeleteProc"].ToString(),
+                    SearchSpec = reader["SearchSpec"] == DBNull.Value ? null : reader["SearchSpec"].ToString(),
+                    SortSpec = reader["SortSpec"] == DBNull.Value ? null : reader["SortSpec"].ToString(),
+                    Type = reader["Type"] == DBNull.Value ? null : reader["Type"].ToString(),
 
-            var dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
+                    Id = Convert.ToInt32(reader["Id"]),
+                    Created = reader.GetDateTime(reader.GetOrdinal("Created")),
+                    CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
+                    LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
+                    LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
+                    GroupId = reader["GroupId"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("GroupId")),
+
+                    Name = reader["Name"]?.ToString(),
+                    TableName = reader["TableName"]?.ToString(),
+                    Lable = reader["Lable"]?.ToString() ?? "",
+                    ColumnName = reader["ColumnName"]?.ToString(),
+                    DataType = reader["DataType"]?.ToString(),
+                    DefaultValue = reader["DefaultValue"]?.ToString(),
+
+                    Required = Convert.ToBoolean(reader["Required"]),
+                    ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
+                    DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
+                    DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
+
+                    Comment = reader["Comment"]?.ToString(),
+
+                    ComponentId = Convert.ToInt32(reader["ComponentId"]),
+                    DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
+
+                    IsCalc = Convert.ToBoolean(reader["IsCalc"]),
+                    CalcExpr = reader["CalcExpr"]?.ToString(),
+                    HtmlStyle = reader["HtmlStyle"]?.ToString(),
+                    LookUp = reader["LookUp"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("LookUp")),
+                    ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
+                    DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
+                    FileDataColumn = reader["FileDataColumn"]?.ToString(),
+                    FieldSize = reader["FieldSize"] == DBNull.Value ? null : reader.GetInt32(reader.GetOrdinal("FieldSize")),
+                };
+
+                dataTable.Add(dto);
+            }
             return dataTable;
         }
 

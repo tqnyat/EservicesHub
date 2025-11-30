@@ -1,3 +1,4 @@
+using DomainServices.Models.Core;
 using DomainServices.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -44,188 +45,97 @@ namespace DomainServices.Controllers
 
 
         [Authorize]
-        [HttpGet("LoadViewList")]
-        public IActionResult LoadViewList()
+        [HttpGet("GetUserViews")]
+        public async Task<IActionResult> GetUserViews()
         {
-            var user = HttpContext.User;
-            return Ok(_coreService.ILoadViewList(user));
+            var result = await _coreService.IGetUserViewsAsync(HttpContext.User);
+
+            if (result == null)
+                return NotFound();
+
+            return Ok(result);
         }
 
         [Authorize]
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        [Route("LoadView")]
-        public IActionResult LoadView([FromBody] Dictionary<string, string> data)
+        [HttpPost("GetViewDefinition")]
+        public async Task<IActionResult> GetViewDefinition([FromBody] Dictionary<string, string> data)
         {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.ILoadView(data, this.User, HttpContext.Session)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
+
+            var result = await _coreService.ILoadView(data, HttpContext.User);
+
+            return Ok(result);
+        }
+
+        [Authorize, HttpPost("GetListDetial")]
+        public async Task<IActionResult> GetTemplate([FromBody] Dictionary<string, string> data)
+        {
+
+            var result = await _coreService.IGetTemplate(data, HttpContext.User);
+
+            return Ok(result);
         }
 
         [Authorize]
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        [Route("GetListDetial")]
-        public IActionResult GetTemplate([FromBody] Dictionary<string, string> data)
+        [HttpPost("SubmitData")]
+        public IActionResult SubmitData([FromBody] Dictionary<string, object> body)
         {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.IGetTemplate(data, this.User)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
+            var data = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["data"].ToString());
+            var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
+
+            var result = _coreService.ISubmitData(data, HttpContext.User, HttpContext.Session);
+
+            return Ok(result);
+        }
+
+        [HttpPost("LoadData")]
+        public async Task<IActionResult> LoadData([FromBody] LoadDataRequest t)
+        {
+            var result = await _coreService.ILoadData(t, HttpContext.User);
+            return Ok(result);
         }
 
         [Authorize]
-        [HttpPost]
-        [Route("SubmitData")]
-        [ValidateAntiForgeryToken]
-        public IActionResult SubmitData([FromBody] Dictionary<string, object> data)
+        [HttpPost("LoadDetailData")]
+        public IActionResult LoadDetailData([FromBody] Dictionary<string, object> body)
+        {
+            var data = JsonConvert.DeserializeObject<Dictionary<string, string>>(body["data"].ToString());
+            var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
+
+            //var result = _coreService.ILoadDetailData(data, HttpContext.User, session);
+
+            return Ok();
+        }
+
+
+        [Authorize, HttpPost("EditRowData")]
+        public async Task<IActionResult> EditRowData([FromBody] EditRowRequest data)
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.ISubmitData(data, this.User, HttpContext.Session)));
+                var result = await _coreService.IEditRowData(data, User);
+
+                return Ok();
             }
-            catch (Exception err)
+            catch (Exception ex)
             {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
+                return StatusCode(500, new { ExceptionError = ex.Message });
             }
         }
-        [ValidateAntiForgeryToken]
+
+
+
+
         [Authorize]
-        [HttpPost]
-        [Route("LoadData")]
-        public IActionResult LoadData([FromBody] Dictionary<string, string> data)
+        [HttpPost("DeleteRowData")]
+        public IActionResult DeleteRowData([FromBody] Dictionary<string, object> body)
         {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.ILoadData(data, this.User, HttpContext.Session)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
+            var data = JsonConvert.DeserializeObject<Dictionary<string, string>>(body["data"].ToString());
+            var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
+
+            var result = _coreService.IDeleteRowData(data, HttpContext.User, HttpContext.Session);
+
+            return Ok(result);
         }
-
-        [ValidateAntiForgeryToken]
-        [Authorize]
-        [HttpPost]
-        [Route("LoadDetailData")]
-        public IActionResult LoadDetailData([FromBody] Dictionary<string, string> data)
-        {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.ILoadDetailData(data, this.User, HttpContext.Session)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-
-        [ValidateAntiForgeryToken]
-        [Authorize]
-        [HttpPost]
-        [Route("EditRowData")]
-        public IActionResult EditRowData([FromBody] Dictionary<string, string> data)
-        {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.IEditRowData(data, this.User, HttpContext.Session)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-
-        [ValidateAntiForgeryToken]
-        [Authorize]
-        [HttpPost]
-        [Route("DeleteRowData")]
-        public IActionResult DeleteRowData([FromBody] Dictionary<string, string> data)
-        {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.IDeleteRowData(data, this.User, HttpContext.Session)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-
-
-        //[Authorize]
-        //[HttpPost]
-        //[Route("PostField")]
-        //public IActionResult PostField([FromBody] Dictionary<string, string> data)
-        //{
-        //    try
-        //    {
-        //        var sessionKey = HttpContext.Session.GetString("sessionKey");
-        //        if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-        //        {
-        //            return BadRequest("Invalid Session");
-        //        }
-        //        return Ok(JsonConvert.SerializeObject(_coreService.IPostField(data, this.User, HttpContext.Session)));
-
-        //    }
-        //    catch (Exception err)
-        //    {
-        //        return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-        //    }
-        //}
-
 
         [ValidateAntiForgeryToken]
         [Authorize]
