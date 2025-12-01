@@ -1,12 +1,12 @@
 ﻿using DomainServices.Data;
+using DomainServices.Data.Repository;
 using DomainServices.Models;
 using DomainServices.Models.Core;
-using DomainServices.Services.Interfaces;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
-using System.ComponentModel;
 using System.Data;
-using System.Threading.Tasks;
+using System.Text;
+using System.Text.RegularExpressions;
 using Component = DomainServices.Models.Component;
 
 namespace DomainServices.Services
@@ -16,15 +16,17 @@ namespace DomainServices.Services
         #region Fields
 
         private readonly CommonServices _commonServices;
+        private readonly DomainDBContext.DomainRepo _domainRepo;
         public SharedVariable sharedVariable;
 
         #endregion
 
         #region Constructor
 
-        public CoreData(CommonServices commonServices)
+        public CoreData(CommonServices commonServices, DomainDBContext.DomainRepo domainRepo)
         {
             _commonServices = commonServices;
+            _domainRepo = domainRepo;
             sharedVariable = new SharedVariable();
         }
 
@@ -32,217 +34,147 @@ namespace DomainServices.Services
 
         #region Methods
 
-        public void InitComponents()
+        public async Task<List<Fields>> InitFieldsStrong(Component component, string selectedId, Users user)
         {
-            DataTable dataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
+            var result = new List<Fields>();
+            var rows = await GetComponentFields(component.Name); // strong metadata
+            var connectionString = _commonServices.getConnectionString();
+            var cmd = new SqlCommand();
 
-            foreach (DataRow dr in sharedVariable.View.Rows)
+            // ---------------------------------------------------
+            // NEW ROW → only defaults (no DB read)
+            // ---------------------------------------------------
+            if (selectedId == "-1")
             {
-                string queryText = " Select C.Name ComponentName, C.Title ComponentTitle, C.TableName ComponentTable , C.RowsCount PageSize, C.OnCreateProc, C.OnUpdateProc, C.OnDeleteProc, C.SearchSpec, C.SortSpec, C.Type ";
-                cmd.Parameters.Clear();
-
-                queryText += " From Component C  Where C.Name = @ComponentName";
-                cmd.Parameters.AddWithValue("@ComponentName", dr["CompName"]);
-
-                dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
-
-                Component component = dr["Component"] != null ? JsonConvert.DeserializeObject<Component>(dr["Component"].ToString()) : null;
-
-                if (component == null)
+                foreach (var row in rows)
                 {
-                    component = new Component();
-                    component.TableName = dataTable.Rows[0]["ComponentTable"].ToString();
-                    component.OnCreateProc = dataTable.Rows[0]["OnCreateProc"].ToString();
-                    component.OnUpdateProc = dataTable.Rows[0]["OnUpdateProc"].ToString();
-                    component.OnDeleteProc = dataTable.Rows[0]["OnDeleteProc"].ToString();
-                    component.SearchSpec = dataTable.Rows[0]["SearchSpec"].ToString();
-                    component.SortSpec = (dataTable.Rows[0]["SortSpec"].ToString() == "") ? "Id DESC" : dataTable.Rows[0]["SortSpec"].ToString();
-                    component.PageSize = Convert.ToInt32(dataTable.Rows[0]["PageSize"].ToString());
-                    component.Type = Convert.ToInt32(dataTable.Rows[0]["Type"].ToString());
-                }
-
-                dr["Component"] = JsonConvert.SerializeObject(component);
-            }
-        }
-
-        public async Task<List<Fields>> InitFields(List<LoadViewListItemDto> coreDataView, string componentName, string activeRow, Users user)
-        {
-            var queryText = "";
-            var tableColumns = "";
-            string connectionString = _commonServices.getConnectionString();
-            var currentLanguage = Thread.CurrentThread.CurrentCulture.Name;
-
-            // define objects
-            SqlCommand cmd = new SqlCommand();
-            var dataRow = coreDataView.First(x => x.CompName == componentName);
-            var componentJson = dataRow.Component?.ToString() ?? "";
-            Console.WriteLine("componentJson = " + componentJson);
-            var component = dataRow.Component;
-
-            var Fields = new List<Fields>();
-            var dataTable = await GetComponentFields(componentName);
-
-            foreach (var row in dataTable)
-            {
-                var field = new Fields
-                {
-                    Name = row.Name.ToString(),
-                    ColumnName = row.ColumnName.ToString(),
-                    //Value = row["DefaultValue"].ToString(),
-                    DefaultValue = row.DefaultValue.ToString(),
-                    Visible = Convert.ToBoolean(row.DisplayInForm.ToString()),
-                    ReadOnly = Convert.ToBoolean(row.ReadOnly.ToString()),
-                    Required = Convert.ToBoolean(row.Required.ToString()),
-                    Type = row.DataType.ToString(),
-                    LookUpQuery = row.LookUp.ToString(),
-                    LookUpValues = null,
-                    ImmediatePost = Convert.ToBoolean(row.ImmediatePost.ToString()),
-                    DisplayInPopup = Convert.ToBoolean(row.DisplayInPopup.ToString()),
-                    IsCalc = Convert.ToBoolean(row.IsCalc.ToString()),
-                    CalcExpr = row.CalcExpr.ToString(),
-                    FileDataColumn = row.FileDataColumn.ToString(),
-                    FileDataValue = "",
-                    FieldSize = (row.FieldSize == null) ? 12 : Convert.ToInt32(row.FieldSize)
-                };
-
-                if (field.LookUpQuery != "")
-                {
-                    queryText = "SELECT Id, Name, Type, Component, TableName, ParentColumn, ChildColumn, FieldValue, FieldCode, SearchSpec From LookUps Where Id = @LookUpId";
-                    cmd.Parameters.Clear();
-                    cmd.Parameters.AddWithValue("@LookUpId", field.LookUpQuery);
-                    DataTable LookUpsTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
-                    LookUpsTable.TableName = "LookUpsTable";
-                    var LookUpType = LookUpsTable.Rows[0]["Type"].ToString();
-
-                    if (LookUpsTable.Rows.Count > 0)
+                    var f = new Fields
                     {
-                        if (LookUpType == "1")
-                        {
-                            field.Type = "lookup-1";
-                            var columnNameByLang = (currentLanguage.ToLower().Contains("en")) ? "Name" : "NameAr";
-                            field.LookUpQuery = $"Select TOP (500) {columnNameByLang} Name, Code From LookUpDetail Where LookUpId = @LookUpId";
+                        Name = row.Name,
+                        ColumnName = row.ColumnName,
+                        Type = row.DataType,
+                        Visible = row.DisplayInForm,
+                        Required = row.Required,
+                        ReadOnly = row.ReadOnly,
+                        DefaultValue = row.DefaultValue,
+                        FieldSize = row.FieldSize ?? 12,
 
-                            DataTable lookupDt = _commonServices.getDataTableFromQuery(field.LookUpQuery, cmd, _commonServices.getConnectionString());
-                            field.LookUpValues = _commonServices.GetLookupListFormDataTable(lookupDt);
-                        }
-                        else if (LookUpType == "2")
-                        {
-                            field.Type = "lookup-1";
-                            queryText = "SELECT C.Id , C.Name, C.TableName, CASE WHEN IsCalc = 1 THEN C.CalcExpr ELSE C.ColumnName END ColumnName, C.CalcExpr, L.FieldCode, L.FieldValue, L.SearchSpec  FROM ComponentField C , LookUps L WHERE L.Component = C.ComponentId AND L.Id = @LookUpId";
-                            DataTable lookUpDT = (_commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString()) as DataTable);
+                        // extra meta
+                        ImmediatePost = row.ImmediatePost,
+                        DisplayInPopup = row.DisplayInPopup,
+                        IsCalc = row.IsCalc,
+                        CalcExpr = row.CalcExpr,
+                        FileDataColumn = row.FileDataColumn,
+                        LookUpQuery = row.LookUp?.ToString(),
+                        label = row.Lable ?? ""
+                    };
 
-                            connectionString = _commonServices.getConnectionString();
-
-                            if (lookUpDT.Rows.Count > 0)
-                            {
-                                queryText = BuildLookUpQuery(Fields, lookUpDT, componentName);
-                                queryText = AddUserAttributes(queryText, user);
-                                field.LookUpQuery = queryText;
-                                lookUpDT = (_commonServices.getDataTableFromQuery(field.LookUpQuery.ToString(), cmd, connectionString) as DataTable);
-                                field.LookUpValues = _commonServices.GetLookupListFormDataTable(lookUpDT);
-                            }
-                        }
-                    }
-                    else
+                    // Resolve default value → Value
+                    if (!string.IsNullOrWhiteSpace(row.DefaultValue))
                     {
-                        throw new Exception("LookUp : LookUp does Not Exists");
-                    }
-                }
-                if (field.Visible)
-                {
-                    if (field.IsCalc)
-                    {
-                        if (field.CalcExpr.ToLower().Contains("userid()"))
-                        {
-                            field.CalcExpr = CommonServices.ReplaceCaseInsensitive(field.CalcExpr, "userid()", $"'{user.Id}'");
-                        }
-                        if (field.CalcExpr.ToLower().Contains("groupid()"))
-                        {
-                            field.CalcExpr = CommonServices.ReplaceCaseInsensitive(field.CalcExpr, "groupid()", $"'{user.UserGroupId}'");
-                        }
-                        if (field.CalcExpr.ToLower().Contains("roleid()"))
-                        {
-                            field.CalcExpr = CommonServices.ReplaceCaseInsensitive(field.CalcExpr, "roleid()", $"'{user.RoleId}'");
-                        }
-                        if (field.CalcExpr.ToLower().Contains("langid()"))
-                        {
-                            field.CalcExpr = CommonServices.ReplaceCaseInsensitive(field.CalcExpr, "langid()", $"'{user.Language}'");
-                        }
-                        tableColumns += $"({field.CalcExpr}) {field.Name},";
-                    }
-                    else if (field.Type == "Date")
-                    {
-                        tableColumns += $"Convert(Nvarchar, {component.TableName}.{field.ColumnName}, 20) {field.Name},";
-                    }
-                    else if (field.Type == "DateTime")
-                    {
-                        tableColumns += $"FORMAT ({component.TableName}.{field.ColumnName}, 'dd/MM/yyyy hh:mm tt', 'en-US') {field.Name},";
-                    }
-                    else if (field.Type == "Time")
-                    {
-                        tableColumns += $"FORMAT ({component.TableName}.{field.ColumnName}, 'hh:mm tt', 'en-US') {field.Name},";
-                    }
-                    else
-                        tableColumns += $"{component.TableName}.{field.ColumnName} {field.Name},";
-                }
+                        string dv = row.DefaultValue.Trim().ToLowerInvariant();
 
-                Fields.Add(field);
-            }
-            queryText = $"SELECT {tableColumns.TrimEnd(',')} FROM {component.TableName} Where id = @ActiveRow";
-
-
-            if (activeRow == "-1")
-            {
-                foreach (var field in Fields)
-                {
-                    if (field.DefaultValue != null && field.DefaultValue.ToString() != "")
-                    {
-                        cmd.Parameters.Clear();
-
-                        if (field.DefaultValue.ToString().ToLower() == "userid()")
+                        if (dv == "userid()")
+                            f.Value = user.Id;
+                        else if (dv == "groupid()")
+                            f.Value = user.UserGroupId;
+                        else if (dv == "roleid()")
+                            f.Value = user.RoleId;
+                        else if (dv == "langid()")
+                            f.Value = user.Language;
+                        else if (dv.Contains("[") && dv.Contains("]"))
                         {
-                            field.Value = user.Id;
-                        }
-                        if (field.DefaultValue.ToString().ToLower() == "groupid()")
-                        {
-                            field.Value = user.UserGroupId;
-                        }
-                        if (field.DefaultValue.ToString().ToLower() == "roleid()")
-                        {
-                            field.Value = user.RoleId;
-                        }
-                        if (field.DefaultValue.ToString().ToLower() == "langid()")
-                        {
-                            field.Value = user.Language;
-                        }
-                        if (field.DefaultValue.ToString().Contains("[") && field.DefaultValue.ToString().Contains("]"))
-                        {
-                            // read from other field value
+                            // TODO: handle [OtherField] expression if you use it
                         }
                         else
                         {
-
-                            field.Value = _commonServices.ExecuteQuery_OneValue($"SELECT {field.DefaultValue}", cmd, connectionString);
+                            f.Value = _commonServices.ExecuteQuery_OneValue(
+                                $"SELECT {row.DefaultValue}", null, connectionString);
                         }
                     }
+
+                    result.Add(f);
                 }
+
+                return result;
             }
-            else
+
+            // ---------------------------------------------------
+            // EDIT ROW → build SELECT + load row from DB
+            // ---------------------------------------------------
+            var selectColumns = new StringBuilder();
+
+            foreach (var row in rows)
             {
-                cmd.Parameters.Clear();
-                cmd.Parameters.AddWithValue("@ActiveRow", activeRow);
+                if (!row.DisplayInForm)
+                    continue;
 
-                var dt = _commonServices.getDataTableFromQuery(queryText, cmd, connectionString, CommandType.Text);
+                string alias = row.Name;
+                string expr;
 
-                for (int i = 0; i < dt.Columns.Count; i++)
+                if (row.IsCalc && !string.IsNullOrEmpty(row.CalcExpr))
                 {
-                    var field = Fields.Find(x => x.Name == dt.Columns[i].ColumnName);
-                    field.Value = dt.Rows[0][dt.Columns[i].ColumnName];
+                    var e = row.CalcExpr;
+
+                    e = CommonServices.ReplaceCaseInsensitive(e, "userid()", $"'{user.Id}'");
+                    e = CommonServices.ReplaceCaseInsensitive(e, "groupid()", $"'{user.UserGroupId}'");
+                    e = CommonServices.ReplaceCaseInsensitive(e, "roleid()", $"'{user.RoleId}'");
+                    e = CommonServices.ReplaceCaseInsensitive(e, "langid()", $"'{user.Language}'");
+
+                    expr = $"({e})";
                 }
+                else
+                {
+                    expr = $"{component.TableName}.{row.ColumnName}";
+                }
+
+                // same formatting rules you used before
+                if (row.DataType.Equals("Date", StringComparison.OrdinalIgnoreCase))
+                    expr = $"CONVERT(NVARCHAR, {expr}, 20)";
+                else if (row.DataType.Equals("DateTime", StringComparison.OrdinalIgnoreCase))
+                    expr = $"FORMAT({expr}, 'dd/MM/yyyy hh:mm tt', 'en-US')";
+                else if (row.DataType.Equals("Time", StringComparison.OrdinalIgnoreCase))
+                    expr = $"FORMAT({expr}, 'hh:mm tt', 'en-US')";
+
+                selectColumns.Append($"{expr} AS {alias},");
             }
 
-            return Fields;
+            var selectClause = selectColumns.ToString().TrimEnd(',');
+            var sql = $"SELECT {selectClause} FROM {component.TableName} WHERE Id = @Id";
+
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("@Id", selectedId);
+
+            var dbRow = await _commonServices.ExecuteSingleRow(sql, cmd, connectionString);
+
+            foreach (var row in rows)
+            {
+                var f = new Fields
+                {
+                    Name = row.Name,
+                    ColumnName = row.ColumnName,
+                    Type = row.DataType,
+                    Visible = row.DisplayInForm,
+                    Required = row.Required,
+                    ReadOnly = row.ReadOnly,
+                    DefaultValue = row.DefaultValue,
+                    FieldSize = row.FieldSize ?? 12,
+
+                    ImmediatePost = row.ImmediatePost,
+                    DisplayInPopup = row.DisplayInPopup,
+                    IsCalc = row.IsCalc,
+                    CalcExpr = row.CalcExpr,
+                    FileDataColumn = row.FileDataColumn,
+                    LookUpQuery = row.LookUp?.ToString(),
+                    label = row.Lable ?? "",
+
+                    Value = (dbRow != null && dbRow.TryGetValue(row.Name, out var val)) ? val : null
+                };
+
+                result.Add(f);
+            }
+
+            return result;
         }
 
         public string AddUserAttributes(string queryText, Users user)
@@ -270,153 +202,503 @@ namespace DomainServices.Services
 
         public async Task<List<ComponentFieldsDto>> GetComponentFields(string componentName)
         {
-            SqlCommand cmd = new SqlCommand();
-            var queryText = "Select Component.Name ComponentName, Component.Title ComponentTitle, Component.TableName ComponentTable, Component.RowsCount PageSize, ComponentField.* " +
-                    "From [dbo].[Component] , [dbo].[ComponentField]" +
-                    "Where Component.Id = ComponentField.ComponentId And Component.Name = @ComponentName" +
-                    " Order by DefaultValue ";
-            cmd.Parameters.AddWithValue("@ComponentName", componentName);
-            var dataTable = new List<ComponentFieldsDto>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            var result = new List<ComponentFieldsDto>();
+
+            var sql = @"
+        SELECT 
+            C.Name       AS ComponentName,
+            C.Title      AS ComponentTitle,
+            C.TableName  AS ComponentTable,
+            C.RowsCount  AS PageSize,
+            C.OnCreateProc,
+            C.OnUpdateProc,
+            C.OnDeleteProc,
+            C.SearchSpec,
+            C.SortSpec,
+            C.Type,
+            CF.*
+        FROM Component C
+        JOIN ComponentField CF ON C.Id = CF.ComponentId
+        WHERE C.Name = @ComponentName
+        ORDER BY CF.DisplaySequence;
+    ";
+
+            using (var conn = new SqlConnection(_commonServices.getConnectionString()))
+            using (var cmd = new SqlCommand(sql, conn))
             {
-                var dto = new ComponentFieldsDto
+                cmd.Parameters.AddWithValue("@ComponentName", componentName);
+
+                await conn.OpenAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
                 {
-                    // 🎯 Component (C.*)
-                    ComponentName = reader["ComponentName"]?.ToString() ?? "",
-                    ComponentTitle = reader["ComponentTitle"]?.ToString() ?? "",
-                    ComponentTable = reader["ComponentTable"] == DBNull.Value ? null : reader["ComponentTable"].ToString(),
-                    PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
-                    OnCreateProc = reader["OnCreateProc"] == DBNull.Value ? null : reader["OnCreateProc"].ToString(),
-                    OnUpdateProc = reader["OnUpdateProc"] == DBNull.Value ? null : reader["OnUpdateProc"].ToString(),
-                    OnDeleteProc = reader["OnDeleteProc"] == DBNull.Value ? null : reader["OnDeleteProc"].ToString(),
-                    SearchSpec = reader["SearchSpec"] == DBNull.Value ? null : reader["SearchSpec"].ToString(),
-                    SortSpec = reader["SortSpec"] == DBNull.Value ? null : reader["SortSpec"].ToString(),
-                    Type = reader["Type"] == DBNull.Value ? null : reader["Type"].ToString(),
+                    var dto = new ComponentFieldsDto
+                    {
+                        ComponentName = reader["ComponentName"]?.ToString() ?? "",
+                        ComponentTitle = reader["ComponentTitle"]?.ToString() ?? "",
+                        ComponentTable = reader["ComponentTable"] == DBNull.Value ? null : reader["ComponentTable"].ToString(),
+                        PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
+                        OnCreateProc = reader["OnCreateProc"] == DBNull.Value ? null : reader["OnCreateProc"].ToString(),
+                        OnUpdateProc = reader["OnUpdateProc"] == DBNull.Value ? null : reader["OnUpdateProc"].ToString(),
+                        OnDeleteProc = reader["OnDeleteProc"] == DBNull.Value ? null : reader["OnDeleteProc"].ToString(),
+                        SearchSpec = reader["SearchSpec"] == DBNull.Value ? null : reader["SearchSpec"].ToString(),
+                        SortSpec = reader["SortSpec"] == DBNull.Value ? null : reader["SortSpec"].ToString(),
+                        Type = reader["Type"] == DBNull.Value ? null : reader["Type"].ToString(),
 
-                    Id = Convert.ToInt32(reader["Id"]),
-                    Created = reader.GetDateTime(reader.GetOrdinal("Created")),
-                    CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
-                    LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
-                    LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
-                    GroupId = reader["GroupId"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("GroupId")),
+                        Id = Convert.ToInt32(reader["Id"]),
+                        Created = reader.GetDateTime(reader.GetOrdinal("Created")),
+                        CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
+                        LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
+                        LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
+                        GroupId = reader["GroupId"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("GroupId")),
 
-                    Name = reader["Name"]?.ToString(),
-                    TableName = reader["TableName"]?.ToString(),
-                    Lable = reader["Lable"]?.ToString() ?? "",
-                    ColumnName = reader["ColumnName"]?.ToString(),
-                    DataType = reader["DataType"]?.ToString(),
-                    DefaultValue = reader["DefaultValue"]?.ToString(),
+                        Name = reader["Name"]?.ToString(),
+                        TableName = reader["TableName"]?.ToString(),
+                        Lable = reader["Lable"]?.ToString() ?? "",
+                        ColumnName = reader["ColumnName"]?.ToString(),
+                        DataType = reader["DataType"]?.ToString(),
+                        DefaultValue = reader["DefaultValue"]?.ToString(),
 
-                    Required = Convert.ToBoolean(reader["Required"]),
-                    ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
-                    DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
-                    DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
+                        Required = Convert.ToBoolean(reader["Required"]),
+                        ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
+                        DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
+                        DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
 
-                    Comment = reader["Comment"]?.ToString(),
+                        Comment = reader["Comment"]?.ToString(),
+                        ComponentId = Convert.ToInt32(reader["ComponentId"]),
+                        DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
 
-                    ComponentId = Convert.ToInt32(reader["ComponentId"]),
-                    DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
+                        IsCalc = Convert.ToBoolean(reader["IsCalc"]),
+                        CalcExpr = reader["CalcExpr"]?.ToString(),
+                        HtmlStyle = reader["HtmlStyle"]?.ToString(),
+                        LookUp = reader["LookUp"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("LookUp")),
+                        ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
+                        DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
+                        FileDataColumn = reader["FileDataColumn"]?.ToString(),
+                        FieldSize = reader["FieldSize"] == DBNull.Value ? null : reader.GetInt32(reader.GetOrdinal("FieldSize")),
+                    };
 
-                    IsCalc = Convert.ToBoolean(reader["IsCalc"]),
-                    CalcExpr = reader["CalcExpr"]?.ToString(),
-                    HtmlStyle = reader["HtmlStyle"]?.ToString(),
-                    LookUp = reader["LookUp"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("LookUp")),
-                    ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
-                    DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
-                    FileDataColumn = reader["FileDataColumn"]?.ToString(),
-                    FieldSize = reader["FieldSize"] == DBNull.Value ? null : reader.GetInt32(reader.GetOrdinal("FieldSize")),
-                };
-
-                dataTable.Add(dto);
+                    result.Add(dto);
+                }
             }
-            return dataTable;
+
+            return result;
         }
 
-        private string BuildLookUpQuery(List<Fields> fields, DataTable lookUpDT, string componentName)
+        #region LoadData - Helpers  
+        // ----------------------------------------------
+        // SQL → List<Dictionary<string,object>>
+        // ----------------------------------------------
+        public List<Dictionary<string, object>> ExecuteListDictionary(
+            string query,
+            SqlCommand cmd,
+            string connectionString)
         {
-            string[] separatingChars = { "[", "]" };
-            List<SearchField> searchFieldList = new List<SearchField>();
-            SearchField searchField;
+            var list = new List<Dictionary<string, object>>();
 
-            var fieldCode = lookUpDT.Select($"id = '{lookUpDT.Rows[0]["FieldCode"]}'")[0]["ColumnName"];
-            var fieldName = lookUpDT.Select($"id = '{lookUpDT.Rows[0]["FieldValue"]}'")[0]["ColumnName"];
-            var tableName = lookUpDT.Rows[0]["TableName"];
-            var searchSpec = lookUpDT.Rows[0]["SearchSpec"];
-            var queryText = "";
-
-            string searchString = searchSpec.ToString().Trim();
-            string[] searchFields = searchString.Split(separatingChars, StringSplitOptions.RemoveEmptyEntries);
-            string[] staticList = { "=", ">", "<", "<>", "and", "or", "between", "(", ")" };
-
-
-            if (searchSpec != null && searchSpec.ToString() != "")
+            using (SqlConnection con = new SqlConnection(connectionString))
             {
+                cmd.Connection = con;
+                cmd.CommandText = query;
 
-                for (int s = 0; s < searchFields.Length; s++)
+                con.Open();
+
+                using (SqlDataReader reader = cmd.ExecuteReader())
                 {
-                    searchField = new SearchField();
+                    while (reader.Read())
+                    {
+                        var row = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
-                    if (searchFields[s] == "P")
-                    {
-                        searchField.FieldName = searchFields[s + 1];
-                        searchField.Type = "Parent";
-                        s++;
-                    }
-                    else if (searchFields[s] == "S")
-                    {
-                        searchField.FieldName = searchFields[s + 1];
-                        searchField.Type = "Session";
-                        s++;
-                    }
-                    else if (staticList.Any(searchFields[s].Trim().Contains))
-                    {
-                        searchField.FieldName = searchFields[s];
-                        searchField.FieldValue = searchFields[s];
-                        searchField.Type = "Static";
-                    }
-                    else
-                    {
-                        searchField.FieldName = searchFields[s];
-                        searchField.Type = "Field";
-                    }
-                    searchFieldList.Add(searchField);
-                }
+                        for (int i = 0; i < reader.FieldCount; i++)
+                        {
+                            object value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                            row[reader.GetName(i)] = value;
+                        }
 
-                searchString = "";
-                foreach (SearchField sf in searchFieldList)
-                {
-                    if (sf.Type == "Parent")
-                    {
-                        string x = fields.Find(x => x.Name == sf.FieldName).Value.ToString();
-
-                        searchString += " " + ((x == "") ? "NULL" : x) + " ";
-                    }
-                    else if (sf.Type == "Field")
-                    {
-                        DataRow[] dr = lookUpDT.Select("Name = '" + sf.FieldName + "'");
-                        if (dr.Length == 0)
-                            throw new Exception($"LookUp Search Spec Error: {sf.FieldName} Does not Exists in Component " + componentName);
-                        searchString += " " + dr[0]["ColumnName"].ToString() + " ";
-                    }
-                    else if (sf.Type == "Session")
-                    {
-                        // data must be get from session and this will be proccessed later
-                        searchString += " ";
-                    }
-                    else
-                    {
-                        searchString += " " + sf.FieldValue + " ";
+                        list.Add(row);
                     }
                 }
             }
 
-            queryText = $"SELECT TOP(500) {fieldCode} Code, {fieldName} Name From {tableName}";
-            queryText += (searchString != "") ? $" WHERE {searchString}" : "";
-
-            return queryText;
+            return list;
         }
+
+        // ----------------------------------------------
+        // Convert SqlCommand → byte[] (for caching)
+        // ----------------------------------------------
+        public byte[] ConvertSqlCommandToByte(SqlCommand cmd)
+        {
+            var snapshot = new SerializableSqlCommand
+            {
+                CommandText = cmd.CommandText,
+                Parameters = cmd.Parameters
+                    .Cast<SqlParameter>()
+                    .Select(p => new SerializableSqlParam
+                    {
+                        Name = p.ParameterName,
+                        Type = p.SqlDbType,
+                        Value = p.Value
+                    }).ToList()
+            };
+
+            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(snapshot));
+        }
+
+        // ----------------------------------------------
+        // Convert byte[] → SqlCommand
+        // ----------------------------------------------
+        public SqlCommand GetSqlCommanFromByte(byte[] data)
+        {
+            if (data == null || data.Length == 0)
+                return null;
+
+            var json = Encoding.UTF8.GetString(data);
+            var snapshot = JsonConvert.DeserializeObject<SerializableSqlCommand>(json);
+
+            var cmd = new SqlCommand();
+            cmd.CommandText = snapshot.CommandText;
+
+            foreach (var p in snapshot.Parameters)
+            {
+                cmd.Parameters.Add(new SqlParameter(p.Name, p.Type) { Value = p.Value });
+            }
+
+            return cmd;
+        }
+
+        // Serializable wrapper
+        class SerializableSqlCommand
+        {
+            public string CommandText { get; set; }
+            public List<SerializableSqlParam> Parameters { get; set; }
+        }
+        class SerializableSqlParam
+        {
+            public string Name { get; set; }
+            public SqlDbType Type { get; set; }
+            public object Value { get; set; }
+        }
+
+        // ----------------------------------------------
+        // Replace Calc Defaults (user attributes)
+        // ----------------------------------------------
+        public string ReplaceCalcDefaults(string expr, Users user)
+        {
+            if (string.IsNullOrEmpty(expr)) return expr;
+
+            return expr
+                .Replace("UserId()", $"'{user.Id}'")
+                .Replace("UserGroupId()", user.UserGroupId.ToString())
+                .Replace("LangId()", $"'{user.Language}'");
+        }
+
+        // ----------------------------------------------
+        // BUILD SEARCH CONDITIONS
+        // ----------------------------------------------
+        public string BuildSearchConditions(
+            Dictionary<string, string> search,
+            List<ComponentDetail> meta,
+            SqlCommand cmd)
+        {
+            if (search == null || search.Count == 0)
+                return "";
+
+            string result = "";
+
+            foreach (var item in search)
+            {
+                string key = item.Key;
+                string userValue = item.Value;
+
+                if (string.IsNullOrEmpty(userValue)) continue;
+
+                string dateSide = "";
+                if (key.Contains("_From"))
+                {
+                    key = key.Replace("_From", "");
+                    dateSide = "From";
+                }
+                else if (key.Contains("_To"))
+                {
+                    key = key.Replace("_To", "");
+                    dateSide = "To";
+                }
+
+                var field = meta.FirstOrDefault(f => f.FieldName == key);
+                if (field == null) continue;
+
+                result += (result != "") ? " AND " : "";
+
+                string left = field.IsCalc ? field.CalcExpression : $"{field.TableName}.{field.TableColumn}";
+                result += left;
+
+                if (dateSide == "From") result += " >= ";
+                else if (dateSide == "To") result += " <= ";
+                else
+                {
+                    result += field.DataType.ToLower() == "text"
+                        ? " LIKE "
+                        : " = ";
+                }
+
+                // param
+                string param = item.Key;
+
+                if (field.DataType.ToLower() == "checkbox")
+                    userValue = (userValue == "true") ? "1" : "0";
+
+                if (dateSide == "To")
+                    userValue += " 23:59:59";
+
+                cmd.Parameters.AddWithValue(param,
+                    field.DataType.ToLower() == "text"
+                        ? $"%{userValue}%"
+                        : userValue);
+            }
+
+            return result;
+        }
+
+        // ----------------------------------------------
+        // BUILD FINAL QUERY (fast)
+        // ----------------------------------------------
+        public void BuildLoadDataQuery(
+            Component component,
+            LoadViewListItemDto view,
+            Dictionary<string, string> search,
+            Users user,
+            SqlCommand cmd,
+            out string query,
+            out string queryCount)
+        {
+            string connectionString = _commonServices.getConnectionString();
+
+            // ---- Load fields for component (fast query)
+            string sql = @"
+            SELECT 
+                Name, TableName, ColumnName, DataType,
+                ReadOnly, Required, DisplayInForm, DisplayInList,
+                IsCalc, CalcExpr, LookUp
+            FROM ComponentField
+            WHERE ComponentId = (SELECT Id FROM Component WHERE Name = @Name)
+            ORDER BY DisplaySequence";
+
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("@Name", component.Name);
+
+            var rows = ExecuteListDictionary(sql, cmd, connectionString);
+
+            var fields = rows.Select(r => new ComponentDetail
+            {
+                FieldName = r["Name"]?.ToString() ?? "",
+                TableName = (r["TableName"]?.ToString() ?? "").ToLower() == "transactions"
+                            ? component.TableName
+                            : r["TableName"]?.ToString(),
+                TableColumn = r["ColumnName"]?.ToString() ?? "",
+                DataType = r["DataType"]?.ToString() ?? "",
+                DisplayInList = Convert.ToBoolean(r["DisplayInList"]),
+                IsCalc = Convert.ToBoolean(r["IsCalc"]),
+                CalcExpression = r["CalcExpr"]?.ToString() ?? "",
+                LookUp = r["LookUp"]?.ToString() ?? "-1"
+            }).ToList();
+
+            var sbSelect = new StringBuilder();
+            foreach (var f in fields.Where(f => f.DisplayInList))
+            {
+                string col =
+                    (f.IsCalc && !string.IsNullOrEmpty(f.CalcExpression))
+                    ? "(" + ReplaceCalcDefaults(f.CalcExpression, user) + ")"
+                    : $"{f.TableName}.{f.TableColumn}";
+
+                sbSelect.Append($"{col} {f.FieldName},");
+            }
+
+            string selectColumns = sbSelect.ToString().TrimEnd(',');
+
+            // ---- access filter
+            string whereAccess = view.ViewDataAccess switch
+            {
+                1 => "",
+                2 => $" GroupId IN (SELECT ID FROM dbo.GetUserGroups('{user.Id}')) ",
+                _ => $" CreatedBy = '{user.Id}' "
+            };
+
+            // ---- search conditions
+            string whereSearch = BuildSearchConditions(search, fields, cmd);
+
+            // ---- final WHERE
+            string whereFinal =_commonServices.GetQueryWhere(
+                view.CompFieldName,
+                whereSearch,
+                whereAccess,
+                component.SearchSpec,
+                user
+            );
+
+            // ---- Final SELECT
+            query =
+                $"SELECT {selectColumns} FROM {component.TableName} " +
+                $"{whereFinal} " +
+                $" ORDER BY {component.TableName}.{component.SortSpec} " +
+                " OFFSET @PageSize * (@PageNumber - 1) ROWS " +
+                " FETCH NEXT @PageSize ROWS ONLY OPTION (RECOMPILE)";
+
+            query = AddUserAttributes(query, user);
+
+            // ---- Count Query
+            queryCount =
+                $"SELECT COUNT(1) FROM {component.TableName} {whereFinal}";
+        }
+        #endregion
 
         #endregion
+    }
+}
+public static class CoreDataShapeMapper
+{
+    private static readonly List<ColumnShape> ViewColumns = new()
+    {
+        new ColumnShape { Name = "Seq", DataType = "decimal" },
+        new ColumnShape { Name = "ClientURL", DataType = "string" },
+        new ColumnShape { Name = "ViewTitle", DataType = "string" },
+        new ColumnShape { Name = "ViewId", DataType = "decimal" },
+        new ColumnShape { Name = "ViewStyle", DataType = "int" },
+        new ColumnShape { Name = "ViewDataAccess", DataType = "int" },
+
+        new ColumnShape { Name = "CompId", DataType = "decimal" },
+        new ColumnShape { Name = "CompName", DataType = "string" },
+        new ColumnShape { Name = "CompTitle", DataType = "string" },
+
+        new ColumnShape { Name = "CompFieldId", DataType = "decimal?" },
+        new ColumnShape { Name = "ParCompId", DataType = "decimal?" },
+        new ColumnShape { Name = "ParCompFieldId", DataType = "decimal?" },
+
+        new ColumnShape { Name = "ReadOnly", DataType = "bool" },
+        new ColumnShape { Name = "ExportExcel", DataType = "bool" },
+        new ColumnShape { Name = "NoInsert", DataType = "bool" },
+        new ColumnShape { Name = "NoUpdate", DataType = "bool" },
+        new ColumnShape { Name = "NoDelete", DataType = "bool" },
+
+        new ColumnShape { Name = "CompFieldName", DataType = "string" },
+        new ColumnShape { Name = "ParCompName", DataType = "string" },
+        new ColumnShape { Name = "ParCompFieldName", DataType = "string" },
+
+        new ColumnShape { Name = "ParCompFieldValue", DataType = "string" },
+
+        new ColumnShape { Name = "HasDetail", DataType = "int" },
+        new ColumnShape { Name = "ViewDescription", DataType = "string" },
+
+        new ColumnShape { Name = "QueryString", DataType = "string" },
+        new ColumnShape { Name = "QueryStringCount", DataType = "string" },
+        new ColumnShape { Name = "QueryStringCmd", DataType = "string" },
+
+        new ColumnShape { Name = "Component", DataType = "object" }
+    };
+
+
+    // --------------------------
+    //  Convert LIST -> DataShape
+    // --------------------------
+    public static DataShape ToShape(List<LoadViewListItemDto> list)
+    {
+        return new DataShape
+        {
+            Columns = ViewColumns,
+
+            Rows = list.Select(x => new Dictionary<string, object>
+            {
+                ["Seq"] = x.Seq,
+                ["ClientURL"] = x.ClientURL,
+                ["ViewTitle"] = x.ViewTitle,
+                ["ViewId"] = x.ViewId,
+                ["ViewStyle"] = x.ViewStyle,
+                ["ViewDataAccess"] = x.ViewDataAccess,
+
+                ["CompId"] = x.CompId,
+                ["CompName"] = x.CompName,
+                ["CompTitle"] = x.CompTitle,
+
+                ["CompFieldId"] = x.CompFieldId,
+                ["ParCompId"] = x.ParCompId,
+                ["ParCompFieldId"] = x.ParCompFieldId,
+
+                ["ReadOnly"] = x.ReadOnly,
+                ["ExportExcel"] = x.ExportExcel,
+                ["NoInsert"] = x.NoInsert,
+                ["NoUpdate"] = x.NoUpdate,
+                ["NoDelete"] = x.NoDelete,
+
+                ["CompFieldName"] = x.CompFieldName,
+                ["ParCompName"] = x.ParCompName,
+                ["ParCompFieldName"] = x.ParCompFieldName,
+                ["ParCompFieldValue"] = x.ParCompFieldValue,
+
+                ["HasDetail"] = x.HasDetail,
+                ["ViewDescription"] = x.ViewDescription,
+
+                ["QueryString"] = x.QueryString,
+                ["QueryStringCount"] = x.QueryStringCount,
+                ["QueryStringCmd"] = x.QueryStringCmd,
+
+                ["Component"] = x.Component
+            }).ToList()
+        };
+    }
+
+
+    // --------------------------
+    //  Convert DataShape -> LIST
+    // --------------------------
+    public static List<LoadViewListItemDto> FromShape(DataShape shape)
+    {
+        var list = new List<LoadViewListItemDto>();
+
+        foreach (var r in shape.Rows)
+        {
+            var x = new LoadViewListItemDto
+            {
+                Seq = Convert.ToDecimal(r["Seq"]),
+                ClientURL = r["ClientURL"]?.ToString() ?? "",
+                ViewTitle = r["ViewTitle"]?.ToString() ?? "",
+                ViewId = Convert.ToDecimal(r["ViewId"]),
+                ViewStyle = Convert.ToInt32(r["ViewStyle"]),
+                ViewDataAccess = Convert.ToInt32(r["ViewDataAccess"]),
+
+                CompId = Convert.ToDecimal(r["CompId"]),
+                CompName = r["CompName"]?.ToString() ?? "",
+                CompTitle = r["CompTitle"]?.ToString() ?? "",
+
+                CompFieldId = r["CompFieldId"] as decimal?,
+                ParCompId = r["ParCompId"] as decimal?,
+                ParCompFieldId = r["ParCompFieldId"] as decimal?,
+
+                ReadOnly = Convert.ToBoolean(r["ReadOnly"]),
+                ExportExcel = Convert.ToBoolean(r["ExportExcel"]),
+                NoInsert = Convert.ToBoolean(r["NoInsert"]),
+                NoUpdate = Convert.ToBoolean(r["NoUpdate"]),
+                NoDelete = Convert.ToBoolean(r["NoDelete"]),
+
+                CompFieldName = r["CompFieldName"]?.ToString() ?? "",
+                ParCompName = r["ParCompName"]?.ToString() ?? "",
+                ParCompFieldName = r["ParCompFieldName"]?.ToString() ?? "",
+                ParCompFieldValue = r.ContainsKey("ParCompFieldValue")
+                    ? r["ParCompFieldValue"]?.ToString() ?? ""
+                    : "",
+
+                HasDetail = Convert.ToInt32(r["HasDetail"]),
+                ViewDescription = r["ViewDescription"]?.ToString() ?? "",
+
+                QueryString = r["QueryString"]?.ToString() ?? "",
+                QueryStringCount = r["QueryStringCount"]?.ToString() ?? "",
+                QueryStringCmd = r["QueryStringCmd"]?.ToString() ?? "",
+
+                Component = JsonConvert.DeserializeObject<Component>(JsonConvert.SerializeObject(r["Component"]))
+            };
+
+            list.Add(x);
+        }
+
+        return list;
     }
 }

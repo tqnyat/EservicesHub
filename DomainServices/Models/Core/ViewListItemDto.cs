@@ -5,17 +5,17 @@
         public decimal Id { get; set; }
         public decimal Type { get; set; }
         public int? ViewStyle { get; set; }
-        public string Name { get; set; } = string.Empty;
-        public string Title { get; set; } = string.Empty;
+        public string Name { get; set; }
+        public string Title { get; set; }
         public decimal ViewSequence { get; set; }
         public decimal? MainCategory { get; set; }
-        public string ViewIcon { get; set; } = string.Empty;
+        public string ViewIcon { get; set; }
         public bool ReadOnly { get; set; }
     }
     public class GetUserViewsResponse
     {
-        public List<ViewListItemDto> ListDetial { get; set; } = new List<ViewListItemDto>();
-        public string UserFullName { get; set; } = string.Empty;
-        public string ApplicationTheme { get; set; } = string.Empty;
+        public List<ViewListItemDto> ListDetial { get; set; }
+        public string UserFullName { get; set; }
+        public string ApplicationTheme { get; set; }
     }
 }

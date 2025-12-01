@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
 using NLog.Config;
+using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
@@ -68,14 +69,13 @@ namespace DomainServices.Services
         public async Task<GetUserViewsResponse> IGetUserViewsAsync(ClaimsPrincipal currentUser)
         {
             if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
                 _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-            var username = currentUser.FindFirst("username").Value;
-            var user = await _userManager.FindByNameAsync(username);
 
-            string userFullName = $"{user.FirstName} {user.LastName}";
-            string applicationTheme = user.ApplicationTheme;
+            var username = currentUser.FindFirst("username")?.Value
+                           ?? throw new Exception("Invalid user context.");
+
+            var user = await _userManager.FindByNameAsync(username)
+                       ?? throw new Exception("User not found.");
 
             string query = @"
                 SELECT DISTINCT 
@@ -98,60 +98,63 @@ namespace DomainServices.Services
 
             var list = new List<ViewListItemDto>();
 
-            using (SqlConnection conn = new SqlConnection(_commonServices.getConnectionString()))
-            using (SqlCommand cmd = new SqlCommand(query, conn))
+            using var conn = new SqlConnection(_commonServices.getConnectionString());
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.Add("@RoleId", SqlDbType.Int).Value = user.RoleId;
+
+            await conn.OpenAsync();
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
             {
-                cmd.Parameters.Add("@RoleId", SqlDbType.Int).Value = user.RoleId;
-
-                await conn.OpenAsync();
-                using (var reader = await cmd.ExecuteReaderAsync())
+                list.Add(new ViewListItemDto
                 {
-                    while (await reader.ReadAsync())
-                    {
-                        var item = new ViewListItemDto
-                        {
-                            Id = reader.GetDecimal(reader.GetOrdinal("Id")),
-                            Type = reader.GetDecimal(reader.GetOrdinal("Type")),
-                            ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle"))
-                                ? (int?)null
-                                : reader.GetInt32(reader.GetOrdinal("ViewStyle")),
-                            Name = reader.GetString(reader.GetOrdinal("Name")),
-                            Title = _localResourceService.GetResource(reader.GetString(reader.GetOrdinal("Title"))),
-                            ViewSequence = reader.GetDecimal(reader.GetOrdinal("ViewSequence")),
-                            MainCategory = reader.IsDBNull(reader.GetOrdinal("MainCategory"))
-                                ? (decimal?)null
-                                : reader.GetDecimal(reader.GetOrdinal("MainCategory")),
-                            ViewIcon = reader.GetString(reader.GetOrdinal("ViewIcon")),
-                            ReadOnly = reader.GetBoolean(reader.GetOrdinal("ReadOnly"))
-                        };
-
-                        list.Add(item);
-                    }
-                }
+                    Id = reader.GetFieldValue<decimal>(reader.GetOrdinal("Id")),
+                    Type = reader.GetFieldValue<decimal>(reader.GetOrdinal("Type")),
+                    ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle"))
+                        ? null
+                        : reader.GetFieldValue<int>(reader.GetOrdinal("ViewStyle")),
+                    Name = reader.GetFieldValue<string>(reader.GetOrdinal("Name")),
+                    Title = _localResourceService.GetResource(reader.GetFieldValue<string>(reader.GetOrdinal("Title"))),
+                    ViewSequence = reader.GetFieldValue<decimal>(reader.GetOrdinal("ViewSequence")),
+                    MainCategory = reader.IsDBNull(reader.GetOrdinal("MainCategory"))
+                        ? null
+                        : reader.GetFieldValue<decimal>(reader.GetOrdinal("MainCategory")),
+                    ViewIcon = reader.GetFieldValue<string>(reader.GetOrdinal("ViewIcon")),
+                    ReadOnly = reader.GetFieldValue<bool>(reader.GetOrdinal("ReadOnly"))
+                });
             }
 
             return new GetUserViewsResponse
             {
                 ListDetial = list,
-                UserFullName = userFullName,
-                ApplicationTheme = applicationTheme
+                UserFullName = $"{user.FirstName} {user.LastName}",
+                ApplicationTheme = user.ApplicationTheme
             };
         }
 
         public async Task<LoadViewResponse> ILoadView(Dictionary<string, string> t, ClaimsPrincipal currentUser)
         {
+            // -------------------------------
+            // 1. Guard clauses
+            // -------------------------------
             if (currentUser?.Identity?.IsAuthenticated != true)
-                _commonServices.ThrowMessageAsException("not authorized or session timeout", "401");
+                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
 
             if (!t.TryGetValue("viewName", out var viewName) || string.IsNullOrWhiteSpace(viewName))
                 throw new Exception("viewName is required");
-            var username = currentUser.FindFirst("username").Value;
+
+            var username = currentUser.FindFirst("username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             var currentLang = Thread.CurrentThread.CurrentCulture.Name.ToLower();
             var lang = currentLang.Contains("ar") ? "ar" : "en";
 
-            string sqlView = @"
+
+            // -------------------------------
+            // 2. SQL to get view + component metadata
+            // -------------------------------
+            const string sql = @"
                 SELECT DISTINCT 
                     VC.Seq, V.ClientURL, V.Title AS ViewTitle, VC.ViewId, V.ViewStyle,
                     VC.ViewDataAccess, C.Id AS CompId, C.Name AS CompName, C.Title AS CompTitle,
@@ -176,11 +179,15 @@ namespace DomainServices.Services
                 ORDER BY VC.Seq;
             ";
 
+
+            // -------------------------------
+            // 3. Execute query (no DataTable)
+            // -------------------------------
             var list = new List<LoadViewListItemDto>();
             string viewDescription = "";
 
             using (var conn = new SqlConnection(_commonServices.getConnectionString()))
-            using (var cmd = new SqlCommand(sqlView, conn))
+            using (var cmd = new SqlCommand(sql, conn))
             {
                 cmd.Parameters.AddWithValue("@RoleId", user.RoleId);
                 cmd.Parameters.AddWithValue("@ViewName", viewName);
@@ -191,916 +198,788 @@ namespace DomainServices.Services
 
                 while (await reader.ReadAsync())
                 {
-                    var item = new LoadViewListItemDto
+                    var dto = new LoadViewListItemDto
                     {
-                        Seq = reader.GetDecimal("Seq"),
-                        ClientURL = reader["ClientURL"]?.ToString() ?? "",
-                        ViewTitle = _localResourceService.GetResource(reader["ViewTitle"]?.ToString() ?? "") ?? "",
-                        ViewId = reader.GetDecimal("ViewId"),
-                        ViewStyle = reader.GetInt32("ViewStyle"),
-                        ViewDataAccess = reader.GetInt32("ViewDataAccess"),
-                        CompId = reader.GetDecimal("CompId"),
-                        CompName = reader["CompName"]?.ToString() ?? "",
-                        CompTitle = _localResourceService.GetResource(reader["CompTitle"]?.ToString() ?? "") ?? "",
+                        Seq = reader.GetFieldValue<decimal>(reader.GetOrdinal("Seq")),
+                        ClientURL = reader.IsDBNull(reader.GetOrdinal("ClientURL")) ? "" : reader.GetString(reader.GetOrdinal("ClientURL")),
+                        ViewTitle = reader.IsDBNull(reader.GetOrdinal("ViewTitle")) ? "" : _localResourceService.GetResource(reader.GetString(reader.GetOrdinal("ViewTitle"))) ?? "",
+                        ViewId = reader.GetFieldValue<decimal>(reader.GetOrdinal("ViewId")),
+                        ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle")) ? 0 : reader.GetInt32(reader.GetOrdinal("ViewStyle")),
+                        ViewDataAccess = reader.GetInt32(reader.GetOrdinal("ViewDataAccess")),
+                        CompId = reader.GetFieldValue<decimal>(reader.GetOrdinal("CompId")),
+                        CompName = reader.IsDBNull(reader.GetOrdinal("CompName")) ? "" : reader.GetString(reader.GetOrdinal("CompName")),
+                        CompTitle = reader.IsDBNull(reader.GetOrdinal("CompTitle")) ? "" : _localResourceService.GetResource(reader.GetString(reader.GetOrdinal("CompTitle"))) ?? "",
+                        CompFieldId = reader.IsDBNull(reader.GetOrdinal("CompFieldId")) ? (decimal?)null : reader.GetDecimal(reader.GetOrdinal("CompFieldId")),
+                        ParCompId = reader.IsDBNull(reader.GetOrdinal("ParCompId")) ? (decimal?)null : reader.GetDecimal(reader.GetOrdinal("ParCompId")),
+                        ParCompFieldId = reader.IsDBNull(reader.GetOrdinal("ParCompFieldId")) ? (decimal?)null : reader.GetDecimal(reader.GetOrdinal("ParCompFieldId")),
+                        ReadOnly = reader.IsDBNull(reader.GetOrdinal("ReadOnly")) ? false : reader.GetBoolean(reader.GetOrdinal("ReadOnly")),
+                        ExportExcel = reader.IsDBNull(reader.GetOrdinal("ExportExcel")) ? false : reader.GetBoolean(reader.GetOrdinal("ExportExcel")),
+                        NoInsert = reader.IsDBNull(reader.GetOrdinal("NoInsert")) ? false : reader.GetBoolean(reader.GetOrdinal("NoInsert")),
+                        NoUpdate = reader.IsDBNull(reader.GetOrdinal("NoUpdate")) ? false : reader.GetBoolean(reader.GetOrdinal("NoUpdate")),
+                        NoDelete = reader.IsDBNull(reader.GetOrdinal("NoDelete")) ? false : reader.GetBoolean(reader.GetOrdinal("NoDelete")),
+                        CompFieldName = reader.IsDBNull(reader.GetOrdinal("CompFieldName")) ? "" : reader.GetString(reader.GetOrdinal("CompFieldName")),
+                        ParCompName = reader.IsDBNull(reader.GetOrdinal("ParCompName")) ? "" : reader.GetString(reader.GetOrdinal("ParCompName")),
+                        ParCompFieldName = reader.IsDBNull(reader.GetOrdinal("ParCompFieldName")) ? "" : reader.GetString(reader.GetOrdinal("ParCompFieldName")),
+                        HasDetail = reader.GetInt32(reader.GetOrdinal("HasDetail")),
+                        ViewDescription = reader.IsDBNull(reader.GetOrdinal("ViewDescription")) ? "" : reader.GetString(reader.GetOrdinal("ViewDescription")),
 
-                        CompFieldId = reader["CompFieldId"] as decimal?,
-                        ParCompId = reader["ParCompId"] as decimal?,
-                        ParCompFieldId = reader["ParCompFieldId"] as decimal?,
-
-                        ReadOnly = reader.GetBoolean("ReadOnly"),
-                        ExportExcel = reader.GetBoolean("ExportExcel"),
-                        NoInsert = reader.GetBoolean("NoInsert"),
-                        NoUpdate = reader.GetBoolean("NoUpdate"),
-                        NoDelete = reader.GetBoolean("NoDelete"),
-
-                        CompFieldName = reader["CompFieldName"]?.ToString() ?? "",
-                        ParCompName = reader["ParCompName"]?.ToString() ?? "",
-                        ParCompFieldName = reader["ParCompFieldName"]?.ToString() ?? "",
-
-                        HasDetail = reader.GetInt32("HasDetail"),
-                        ViewDescription = reader["ViewDescription"]?.ToString() ?? ""
                     };
 
-                    viewDescription = item.ViewDescription;
-                    list.Add(item);
+                    viewDescription = dto.ViewDescription;
+                    list.Add(dto);
                 }
             }
 
-            var componentNames = list.Select(x => x.CompName).Distinct().ToList();
 
+            // -------------------------------
+            // 4. Load Component Definitions
+            // -------------------------------
+            var componentNames = list.Select(x => x.CompName).Distinct().ToList();
             var componentMap = await LoadAllComponentDefinitions(componentNames);
 
-            // attach metadata
             foreach (var item in list)
-            {
                 if (componentMap.TryGetValue(item.CompName, out var def))
                     item.Component = def;
-            }
 
-            var json = JsonConvert.SerializeObject(list);
-            var bytes = Encoding.UTF8.GetBytes(json);
-            var base64 = Convert.ToBase64String(bytes);
+
+            // -------------------------------
+            // 5. BUILD NEW CoreDataView AS DataShape (REPLACES DataTable!)
+            // -------------------------------
+            var shape = CoreDataShapeMapper.ToShape(list);
+            string coreDataViewJson = JsonConvert.SerializeObject(shape);
+
 
             return new LoadViewResponse
             {
                 ListDetial = list,
-                ViewDescription =  viewDescription,
-                UpdatedSession =  new Dictionary<string, object> {
-                    { "CoreDataView", base64 }
+                ViewDescription = viewDescription,
+                UpdatedSession = new Dictionary<string, object>
+                {
+                    { "CoreDataView", coreDataViewJson }
                 }
             };
         }
 
         public async Task<ListDetialResponse> IGetTemplate(Dictionary<string, string> t, ClaimsPrincipal currentUser)
         {
+            // ---------------------------------------
+            // 1. Authorization & Input Validation
+            // ---------------------------------------
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            if (!t.TryGetValue("componentName", out var componentName) || string.IsNullOrWhiteSpace(componentName))
+            if (!t.TryGetValue("componentName", out var componentName) ||
+                string.IsNullOrWhiteSpace(componentName))
                 throw new Exception("componentName is required");
 
-            string sql = @"
-                SELECT C.Name AS ComponentName, C.Title AS ComponentTitle, C.RowsCount AS PageSize, CF.*
+
+            // ---------------------------------------
+            // 2. Query
+            // ---------------------------------------
+            const string sql = @"
+                SELECT 
+                    C.Name AS ComponentName, 
+                    C.Title AS ComponentTitle, 
+                    C.RowsCount AS PageSize, 
+                    CF.*
                 FROM Component C
                 JOIN ComponentField CF ON C.Id = CF.ComponentId
                 WHERE C.Name = @ComponentName
                 ORDER BY CF.DisplaySequence;
             ";
 
+
+            // ---------------------------------------
+            // 3. Data Retrieval
+            // ---------------------------------------
             var list = new List<ListDetialDto>();
 
-            using (var conn = new SqlConnection(_commonServices.getConnectionString()))
-            using (var cmd = new SqlCommand(sql, conn))
+            using var conn = new SqlConnection(_commonServices.getConnectionString());
+            using var cmd = new SqlCommand(sql, conn);
+
+            cmd.Parameters.AddWithValue("@ComponentName", componentName);
+
+            await conn.OpenAsync();
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
             {
-                cmd.Parameters.AddWithValue("@ComponentName", componentName);
-
-                await conn.OpenAsync();
-                using var reader = await cmd.ExecuteReaderAsync();
-
-                while (await reader.ReadAsync())
+                var dto = new ListDetialDto
                 {
-                    var dto = new ListDetialDto
-                    {
-                        ComponentName = reader["ComponentName"]?.ToString() ?? "",
-                        ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? ""),
-                        PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
+                    ComponentName = reader["ComponentName"]?.ToString() ?? "",
+                    ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? "") ?? "",
+                    PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
 
-                        Id = Convert.ToInt32(reader["Id"]),
-                        Created = Convert.ToDateTime(reader["Created"]),
+                    Id = reader.GetInt32(reader.GetOrdinal("Id")),
+                    Created = reader.GetDateTime(reader.GetOrdinal("Created")),
+                    CreatedBy = reader["CreatedBy"]?.ToString(),
+                    LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
+                    LastUpdBy = reader["LastUpdBy"]?.ToString(),
+                    GroupId = reader["GroupId"] == DBNull.Value ? null : Convert.ToDecimal(reader["GroupId"]),
 
-                        CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
-                        LastUpd = reader["LastUpd"] == DBNull.Value ? null : Convert.ToDateTime(reader["LastUpd"]),
-                        LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
-                        GroupId = reader["GroupId"] == DBNull.Value ? null : Convert.ToDecimal(reader["GroupId"]),
+                    Name = reader["Name"]?.ToString(),
+                    TableName = reader["TableName"]?.ToString(),
+                    Lable = _localResourceService.GetResource(reader["Lable"]?.ToString() ?? "") ?? "",
+                    ColumnName = reader["ColumnName"]?.ToString(),
+                    DataType = reader["DataType"]?.ToString(),
+                    DefaultValue = reader["DefaultValue"]?.ToString(),
 
-                        Name = reader["Name"].ToString(),
-                        TableName = reader["TableName"] == DBNull.Value ? null : reader["TableName"].ToString(),
-                        Lable = _localResourceService.GetResource(reader["Lable"]?.ToString() ?? ""),
-                        ColumnName = reader["ColumnName"].ToString(),
-                        DataType = reader["DataType"].ToString(),
-                        DefaultValue = reader["DefaultValue"] == DBNull.Value ? null : reader["DefaultValue"].ToString(),
+                    Required = reader.GetBoolean(reader.GetOrdinal("Required")),
+                    ReadOnly = reader.GetBoolean(reader.GetOrdinal("ReadOnly")),
+                    DisplayInList = reader.GetBoolean(reader.GetOrdinal("DisplayInList")),
+                    DisplayInForm = reader.GetBoolean(reader.GetOrdinal("DisplayInForm")),
+                    Comment = reader["Comment"]?.ToString(),
 
-                        Required = Convert.ToBoolean(reader["Required"]),
-                        ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
-                        DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
-                        DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
-                        Comment = reader["Comment"] == DBNull.Value ? null : reader["Comment"].ToString(),
+                    ComponentId = reader.GetInt32(reader.GetOrdinal("ComponentId")),
+                    DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
 
-                        ComponentId = Convert.ToInt32(reader["ComponentId"]),
-                        DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
+                    IsCalc = reader.GetBoolean(reader.GetOrdinal("IsCalc")),
+                    CalcExpr = reader["CalcExpr"]?.ToString(),
+                    HtmlStyle = reader["HtmlStyle"]?.ToString(),
+                    LookUp = reader["LookUp"] == DBNull.Value ? null : Convert.ToDecimal(reader["LookUp"]),
+                    ImmediatePost = reader.GetBoolean(reader.GetOrdinal("ImmediatePost")),
+                    DisplayInPopup = reader.GetBoolean(reader.GetOrdinal("DisplayInPopup")),
+                    FileDataColumn = reader["FileDataColumn"]?.ToString(),
+                    FieldSize = reader["FieldSize"] == DBNull.Value ? null : Convert.ToInt32(reader["FieldSize"])
+                };
 
-                        IsCalc = Convert.ToBoolean(reader["IsCalc"]),
-                        CalcExpr = reader["CalcExpr"] == DBNull.Value ? null : reader["CalcExpr"].ToString(),
-                        HtmlStyle = reader["HtmlStyle"] == DBNull.Value ? null : reader["HtmlStyle"].ToString(),
-                        LookUp = reader["LookUp"] == DBNull.Value ? null : Convert.ToDecimal(reader["LookUp"]),
-                        ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
-                        DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
-                        FileDataColumn = reader["FileDataColumn"] == DBNull.Value ? null : reader["FileDataColumn"].ToString(),
-                        FieldSize = reader["FieldSize"] == DBNull.Value ? null : Convert.ToInt32(reader["FieldSize"])
-                    };
-
-                    list.Add(dto);
-                }
+                list.Add(dto);
             }
 
-            return new ListDetialResponse { ListDetial = list };
+
+            // ---------------------------------------
+            // 4. Response (DTO)
+            // ---------------------------------------
+            return new ListDetialResponse
+            {
+                ListDetial = list
+            };
         }
 
-        public async Task<object> ISubmitData(Dictionary<string, object> t, ClaimsPrincipal currentUser, ISession session)
+        //public async Task<object> ISubmitData(Dictionary<string, object> t, ClaimsPrincipal currentUser, ISession session)
+        //{
+        //    if (currentUser == null || !currentUser.Identity.IsAuthenticated)
+        //    {
+        //        _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
+        //    }
+
+        //    #region Declare Variables
+
+        //    // declare variables
+        //    var componentName = t["componentName"].ToString();
+        //    var submitedData = JsonConvert.DeserializeObject<Dictionary<string, object>>(t["dataList"].ToString());
+        //    var selectedId = t["selectedId"].ToString();
+        //    var saveType = t["saveType"].ToString();
+
+        //    var queryText = "";
+        //    var tableColumns = "";
+        //    var tableValues = "";
+        //    var parentField = "1";
+        //    var parentFieldValue = "1";
+        //    var connectionString = "";
+        //    var hasGroupId = false;
+        //    string rowId = "0";
+        //    object value = "";
+
+
+        //    // define objects
+        //    var user = _userManager.GetUserAsync(currentUser).Result;
+        //    var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
+        //    var cmd = new SqlCommand();
+        //    var component = new Component();
+        //    var componentDetailList = new List<ComponentDetail>();
+        //    DataRow[] dataRow;
+        //    List<LoadViewListItemDto> da = null;
+        //    dataRow = coreDataView.Select("CompName = '" + componentName + "'");
+        //    parentField = dataRow[0]["CompFieldName"].ToString();
+        //    parentFieldValue = dataRow[0]["ParCompFieldValue"].ToString();
+        //    var sessionFields = session.GetString("Fields" + componentName + selectedId);
+        //    var fields = (sessionFields == null || t["selectedId"] == "-1") ?
+        //        _coreData.InitFields(da, componentName, selectedId, user) :
+        //        JsonConvert.DeserializeObject<List<Fields>>(sessionFields);
+        //    component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
+
+        //    #endregion
+
+        //    if (saveType == "new" && dataRow[0]["NoInsert"] != null && dataRow[0]["NoInsert"].ToString() == "1")
+        //    {
+        //        return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية الاضافة" } };
+        //    }
+
+        //    if (saveType == "edit" && dataRow[0]["NoUpdate"] != null && dataRow[0]["NoUpdate"].ToString() == "1")
+        //    {
+        //        return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية التعديل" } };
+        //    }
+
+        //    foreach (var row in fields)
+        //    {
+        //        if ((!Convert.ToBoolean(row.ReadOnly) && Convert.ToBoolean(row.Visible)
+        //            || (row.DefaultValue != null && row.DefaultValue.ToString() != "" && saveType == "new"))
+        //            && row.Type.ToString() != "Button" && !row.IsCalc)
+        //        {
+        //            submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var val);
+        //            row.Value = (val == null) ? row.Value : val;
+
+        //            if (row.Required && (row.Value == null || row.Value.ToString() == ""))
+        //            {
+        //                throw new Exception($"column {row.Name} is Required", new Exception(row.Name));
+        //            }
+
+        //            if ((row.Value == null || row.Value.ToString() == "")
+        //                && (row.DefaultValue != null && row.DefaultValue.ToString() != ""))
+        //            {
+        //                row.Value = _commonServices.GetFieldDefaultValue(fields, row.DefaultValue);
+        //            }
+        //            if (row.Value != null && CheckHtmlContent(row.Value.ToString()))
+        //            {
+        //                if (user?.RoleId != 1 && componentName != "SysView")
+        //                {
+        //                    throw new Exception("Contains Html Content");
+        //                }
+        //            }
+        //            if (row.Value != null && row.Value.ToString() != "")
+        //            {
+        //                if (row.Type.ToString().ToLower() == "date" || row.Type.ToString().ToLower() == "datetime" || row.Type.ToString().ToLower() == "time")
+        //                {
+        //                    string dateString, format = "";
+        //                    DateTime result;
+        //                    CultureInfo provider = CultureInfo.InvariantCulture;
+        //                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
+        //                    rowVal = rowVal == null ? row.Value : rowVal;
+        //                    dateString = rowVal.ToString();
+
+        //                    if (row.Type.ToString().ToLower() == "date")
+        //                    {
+        //                        format = "dd/MM/yyyy";
+        //                    }
+        //                    else if (row.Type.ToString().ToLower() == "datetime")
+        //                    {
+        //                        format = "yyyy-MM-ddTHH:mm";
+        //                    }
+        //                    else if (row.Type.ToString().ToLower() == "time")
+        //                    {
+        //                        format = "hh:mm tt";
+        //                    }
+
+        //                    result = DateTime.ParseExact(dateString, format, provider);
+
+        //                    row.Value = result;
+        //                }
+        //                else if (row.Type.ToString().ToLower() == "checkbox")
+        //                {
+        //                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
+        //                    row.Value = rowVal == null ? Convert.ToBoolean(row.Value) : Convert.ToBoolean(rowVal);
+        //                }
+        //                else if (row.Type.ToString().ToLower() == "file")// manage Files
+        //                {
+        //                    if (submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var fileValue))
+        //                    {
+        //                        row.Value = fileValue;
+        //                        row.FileDataValue = submitedData[row.Name + "_data"].ToString();
+        //                    }
+        //                }
+        //                else
+        //                {
+        //                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
+        //                    row.Value = rowVal == null ? row.Value : rowVal;
+        //                }
+        //            }
+
+        //            if (saveType == "new")
+        //            {
+        //                if (row.ColumnName.ToLower() == "groupid")
+        //                {
+        //                    hasGroupId = true;
+        //                }
+
+        //                if (row.Type.ToString().ToLower() == "file") // manage Files
+        //                {
+        //                    if (!String.IsNullOrEmpty(row.FileDataColumn?.ToString()))
+        //                    {
+        //                        if (row.FileDataColumn == "clear-old-data")
+        //                        {
+        //                            tableColumns += "'',";
+        //                            tableValues += "@" + row.Name + ",";
+
+        //                            tableColumns += "'',";
+        //                            tableValues += "@" + row.FileDataColumn + ",";
+        //                        }
+        //                        else
+        //                        {
+        //                            tableColumns += row.ColumnName + ",";
+        //                            tableValues += "@" + row.Name + ",";
+
+        //                            tableColumns += row.FileDataColumn + ",";
+        //                            tableValues += "@" + row.FileDataColumn + ",";
+        //                        }
+        //                    }
+
+        //                }
+        //                else
+        //                {
+        //                    tableColumns += row.ColumnName + ",";
+        //                    tableValues += "@" + row.Name + ",";
+        //                }
+        //            }
+        //            else
+        //            {
+        //                if (row.Type.ToString().ToLower() == "file" && row.Value != null && row.Value.ToString() != "")
+        //                {
+        //                    if (!string.IsNullOrEmpty(row.FileDataValue) && row.FileDataValue != "clear-old-file")
+        //                    {
+        //                        tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
+        //                        tableColumns += row.FileDataColumn + "=" + "@" + row.FileDataColumn + ",";
+        //                        byte[] fileBytes = Convert.FromBase64String(row.FileDataValue.ToString());
+        //                        //cmd.Parameters.AddWithValue("@" + row.FileDataColumn, fileBytes);
+        //                    }
+        //                    else
+        //                    {
+        //                        tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
+        //                    }
+        //                }
+        //                else if (row.Type.ToString().ToLower() != "file")
+        //                {
+        //                    tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
+        //                }
+        //            }
+
+        //            cmd.Parameters.AddWithValue("@" + row.Name, (row.Value == null || row.Value.ToString() == "") ? DBNull.Value : row.Value);
+
+        //            if (row.Type.ToString().ToLower() == "file") // manage Files
+        //            {
+        //                byte[] fileBytes = (row.FileDataValue == "clear-old-file") ? new byte[0] : Convert.FromBase64String(row.FileDataValue.ToString());
+        //                cmd.Parameters.AddWithValue("@" + row.FileDataColumn, fileBytes);
+        //            }
+        //        }
+        //        if (row.Name.ToString() == parentField)
+        //            parentField = row.ColumnName.ToString();
+        //    }
+
+        //    string guid = Guid.NewGuid().ToString();
+        //    if (saveType == "new")
+        //    {
+        //        if (parentField != "1" && parentFieldValue != "" && parentFieldValue != null)
+        //        {
+        //            tableColumns += parentField + ",";
+        //            tableValues += "'" + parentFieldValue + "',";
+
+        //            if (parentField.ToLower() == "groupid")
+        //            {
+        //                hasGroupId = true;
+        //            }
+        //        }
+
+        //        tableColumns += component.TableName.ToLower() == "aspnetusers" ? "Id," : "";
+
+        //        tableColumns += "CreatedBy, LastUpdBy";
+        //        tableColumns += hasGroupId ? "" : ", GroupId";
+        //        tableColumns += component.TableName.ToLower() == "aspnetusers" ? ", UserGroupId, SecurityStamp" : "";
+
+        //        tableValues += component.TableName.ToLower() == "aspnetusers" ? $"'{guid}'," : "";
+        //        tableValues += "'" + user.Id + "', '" + user.Id + "'";
+        //        tableValues += hasGroupId ? "" : "," + user.UserGroupId;
+        //        tableValues += component.TableName.ToLower() == "aspnetusers" ? $", {user.UserGroupId} ,'{guid}'" : "";
+
+        //        queryText = "insert into " + component.TableName + "(" + tableColumns.TrimEnd(',') + ") Values (" + tableValues.TrimEnd(',') + ")";
+        //    }
+        //    else
+        //    {
+        //        tableColumns += "LastUpdBy = '" + user.Id + "', LastUpd = GetDate()";
+        //        queryText = "Update " + component.TableName + " Set " + tableColumns.TrimEnd(',') + " Where Id = @SelectedId";
+        //        cmd.Parameters.AddWithValue("@SelectedId", selectedId);
+        //    }
+        //    connectionString = _commonServices.getConnectionString();
+
+        //    SqlTransaction sqlTrans = null;
+        //    SqlConnection con = new SqlConnection(connectionString);
+        //    try
+        //    {
+        //        con.Open();
+        //        sqlTrans = con.BeginTransaction(IsolationLevel.ReadUncommitted);
+        //        rowId = _commonServices.ExecuteQuery_OneValue_Trans(queryText + "; SELECT scope_identity(); ", ref con, ref sqlTrans, cmd, CommandType.Text);
+        //        rowId = (rowId == "") ? selectedId : rowId;
+
+        //        if (saveType == "new")
+        //        {
+        //            rowId = component.TableName.ToLower() == "aspnetusers" ? guid : rowId;
+        //            if (component.OnCreateProc != null && component.OnCreateProc != "")
+        //            {
+        //                cmd.Parameters.Clear();
+        //                cmd.Parameters.AddWithValue("@RowId", rowId);
+        //                int x = _commonServices.excuteQuery_Trans(component.OnCreateProc, ref con, ref sqlTrans, cmd, CommandType.StoredProcedure);
+        //            }
+        //        }
+        //        else
+        //        {
+        //            if (component.OnUpdateProc != null && component.OnUpdateProc != "")
+        //            {
+        //                cmd.Parameters.Clear();
+        //                cmd.Parameters.AddWithValue("@RowId", rowId);
+        //                int x = _commonServices.excuteQuery_Trans(component.OnUpdateProc, ref con, ref sqlTrans, cmd, CommandType.StoredProcedure);
+
+        //            }
+        //        }
+
+        //        sqlTrans.Commit();
+        //        session.SetString("Fields" + componentName + rowId, JsonConvert.SerializeObject(fields));
+        //    }
+        //    catch (Exception e)
+        //    {
+        //        sqlTrans.Rollback();
+        //        throw;
+        //    }
+        //    finally
+        //    {
+        //        if (con != null && con.State != ConnectionState.Closed)
+        //            con.Close();
+        //    }
+
+        //    if (componentName == "CompanyUsers")
+        //    {
+        //        return new Dictionary<string, object> { { "RowId", rowId }, { "saveType", saveType } };
+        //    }
+        //    return new Dictionary<string, object> { { "RowId", rowId } };
+        //}
+
+        public async Task<LoadDataResultDto> ILoadData(
+    LoadDataRequest t,
+    ClaimsPrincipal currentUser)
         {
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-
-            #region Declare Variables
-
-            // declare variables
-            var componentName = t["componentName"].ToString();
-            var submitedData = JsonConvert.DeserializeObject<Dictionary<string, object>>(t["dataList"].ToString());
-            var selectedId = t["selectedId"].ToString();
-            var saveType = t["saveType"].ToString();
-
-            var queryText = "";
-            var tableColumns = "";
-            var tableValues = "";
-            var parentField = "1";
-            var parentFieldValue = "1";
-            var connectionString = "";
-            var hasGroupId = false;
-            string rowId = "0";
-            object value = "";
-
-
-            // define objects
-            var user = _userManager.GetUserAsync(currentUser).Result;
-            var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-            var cmd = new SqlCommand();
-            var component = new Component();
-            var componentDetailList = new List<ComponentDetail>();
-            DataRow[] dataRow;
-            List<LoadViewListItemDto> da = null;
-            dataRow = coreDataView.Select("CompName = '" + componentName + "'");
-            parentField = dataRow[0]["CompFieldName"].ToString();
-            parentFieldValue = dataRow[0]["ParCompFieldValue"].ToString();
-            var sessionFields = session.GetString("Fields" + componentName + selectedId);
-            var fields = (sessionFields == null || t["selectedId"] == "-1") ?
-                _coreData.InitFields(da, componentName, selectedId, user) :
-                JsonConvert.DeserializeObject<List<Fields>>(sessionFields);
-            component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
-
-            #endregion
-
-            if (saveType == "new" && dataRow[0]["NoInsert"] != null && dataRow[0]["NoInsert"].ToString() == "1")
-            {
-                return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية الاضافة" } };
-            }
-
-            if (saveType == "edit" && dataRow[0]["NoUpdate"] != null && dataRow[0]["NoUpdate"].ToString() == "1")
-            {
-                return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية التعديل" } };
-            }
-
-            foreach (var row in fields)
-            {
-                if ((!Convert.ToBoolean(row.ReadOnly) && Convert.ToBoolean(row.Visible)
-                    || (row.DefaultValue != null && row.DefaultValue.ToString() != "" && saveType == "new"))
-                    && row.Type.ToString() != "Button" && !row.IsCalc)
-                {
-                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var val);
-                    row.Value = (val == null) ? row.Value : val;
-
-                    if (row.Required && (row.Value == null || row.Value.ToString() == ""))
-                    {
-                        throw new Exception($"column {row.Name} is Required", new Exception(row.Name));
-                    }
-
-                    if ((row.Value == null || row.Value.ToString() == "")
-                        && (row.DefaultValue != null && row.DefaultValue.ToString() != ""))
-                    {
-                        row.Value = _commonServices.GetFieldDefaultValue(fields, row.DefaultValue);
-                    }
-                    if (row.Value != null && CheckHtmlContent(row.Value.ToString()))
-                    {
-                        if (user?.RoleId != 1 && componentName != "SysView")
-                        {
-                            throw new Exception("Contains Html Content");
-                        }
-                    }
-                    if (row.Value != null && row.Value.ToString() != "")
-                    {
-                        if (row.Type.ToString().ToLower() == "date" || row.Type.ToString().ToLower() == "datetime" || row.Type.ToString().ToLower() == "time")
-                        {
-                            string dateString, format = "";
-                            DateTime result;
-                            CultureInfo provider = CultureInfo.InvariantCulture;
-                            submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
-                            rowVal = rowVal == null ? row.Value : rowVal;
-                            dateString = rowVal.ToString();
-
-                            if (row.Type.ToString().ToLower() == "date")
-                            {
-                                format = "dd/MM/yyyy";
-                            }
-                            else if (row.Type.ToString().ToLower() == "datetime")
-                            {
-                                format = "yyyy-MM-ddTHH:mm";
-                            }
-                            else if (row.Type.ToString().ToLower() == "time")
-                            {
-                                format = "hh:mm tt";
-                            }
-
-                            result = DateTime.ParseExact(dateString, format, provider);
-
-                            row.Value = result;
-                        }
-                        else if (row.Type.ToString().ToLower() == "checkbox")
-                        {
-                            submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
-                            row.Value = rowVal == null ? Convert.ToBoolean(row.Value) : Convert.ToBoolean(rowVal);
-                        }
-                        else if (row.Type.ToString().ToLower() == "file")// manage Files
-                        {
-                            if (submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var fileValue))
-                            {
-                                row.Value = fileValue;
-                                row.FileDataValue = submitedData[row.Name + "_data"].ToString();
-                            }
-                        }
-                        else
-                        {
-                            submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
-                            row.Value = rowVal == null ? row.Value : rowVal;
-                        }
-                    }
-
-                    if (saveType == "new")
-                    {
-                        if (row.ColumnName.ToLower() == "groupid")
-                        {
-                            hasGroupId = true;
-                        }
-
-                        if (row.Type.ToString().ToLower() == "file") // manage Files
-                        {
-                            if (!String.IsNullOrEmpty(row.FileDataColumn?.ToString()))
-                            {
-                                if (row.FileDataColumn == "clear-old-data")
-                                {
-                                    tableColumns += "'',";
-                                    tableValues += "@" + row.Name + ",";
-
-                                    tableColumns += "'',";
-                                    tableValues += "@" + row.FileDataColumn + ",";
-                                }
-                                else
-                                {
-                                    tableColumns += row.ColumnName + ",";
-                                    tableValues += "@" + row.Name + ",";
-
-                                    tableColumns += row.FileDataColumn + ",";
-                                    tableValues += "@" + row.FileDataColumn + ",";
-                                }
-                            }
-
-                        }
-                        else
-                        {
-                            tableColumns += row.ColumnName + ",";
-                            tableValues += "@" + row.Name + ",";
-                        }
-                    }
-                    else
-                    {
-                        if (row.Type.ToString().ToLower() == "file" && row.Value != null && row.Value.ToString() != "")
-                        {
-                            if (!string.IsNullOrEmpty(row.FileDataValue) && row.FileDataValue != "clear-old-file")
-                            {
-                                tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
-                                tableColumns += row.FileDataColumn + "=" + "@" + row.FileDataColumn + ",";
-                                byte[] fileBytes = Convert.FromBase64String(row.FileDataValue.ToString());
-                                //cmd.Parameters.AddWithValue("@" + row.FileDataColumn, fileBytes);
-                            }
-                            else
-                            {
-                                tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
-                            }
-                        }
-                        else if (row.Type.ToString().ToLower() != "file")
-                        {
-                            tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
-                        }
-                    }
-
-                    cmd.Parameters.AddWithValue("@" + row.Name, (row.Value == null || row.Value.ToString() == "") ? DBNull.Value : row.Value);
-
-                    if (row.Type.ToString().ToLower() == "file") // manage Files
-                    {
-                        byte[] fileBytes = (row.FileDataValue == "clear-old-file") ? new byte[0] : Convert.FromBase64String(row.FileDataValue.ToString());
-                        cmd.Parameters.AddWithValue("@" + row.FileDataColumn, fileBytes);
-                    }
-                }
-                if (row.Name.ToString() == parentField)
-                    parentField = row.ColumnName.ToString();
-            }
-
-            string guid = Guid.NewGuid().ToString();
-            if (saveType == "new")
-            {
-                if (parentField != "1" && parentFieldValue != "" && parentFieldValue != null)
-                {
-                    tableColumns += parentField + ",";
-                    tableValues += "'" + parentFieldValue + "',";
-
-                    if (parentField.ToLower() == "groupid")
-                    {
-                        hasGroupId = true;
-                    }
-                }
-
-                tableColumns += component.TableName.ToLower() == "aspnetusers" ? "Id," : "";
-
-                tableColumns += "CreatedBy, LastUpdBy";
-                tableColumns += hasGroupId ? "" : ", GroupId";
-                tableColumns += component.TableName.ToLower() == "aspnetusers" ? ", UserGroupId, SecurityStamp" : "";
-
-                tableValues += component.TableName.ToLower() == "aspnetusers" ? $"'{guid}'," : "";
-                tableValues += "'" + user.Id + "', '" + user.Id + "'";
-                tableValues += hasGroupId ? "" : "," + user.UserGroupId;
-                tableValues += component.TableName.ToLower() == "aspnetusers" ? $", {user.UserGroupId} ,'{guid}'" : "";
-
-                queryText = "insert into " + component.TableName + "(" + tableColumns.TrimEnd(',') + ") Values (" + tableValues.TrimEnd(',') + ")";
-            }
-            else
-            {
-                tableColumns += "LastUpdBy = '" + user.Id + "', LastUpd = GetDate()";
-                queryText = "Update " + component.TableName + " Set " + tableColumns.TrimEnd(',') + " Where Id = @SelectedId";
-                cmd.Parameters.AddWithValue("@SelectedId", selectedId);
-            }
-            connectionString = _commonServices.getConnectionString();
-
-            SqlTransaction sqlTrans = null;
-            SqlConnection con = new SqlConnection(connectionString);
-            try
-            {
-                con.Open();
-                sqlTrans = con.BeginTransaction(IsolationLevel.ReadUncommitted);
-                rowId = _commonServices.ExecuteQuery_OneValue_Trans(queryText + "; SELECT scope_identity(); ", ref con, ref sqlTrans, cmd, CommandType.Text);
-                rowId = (rowId == "") ? selectedId : rowId;
-
-                if (saveType == "new")
-                {
-                    rowId = component.TableName.ToLower() == "aspnetusers" ? guid : rowId;
-                    if (component.OnCreateProc != null && component.OnCreateProc != "")
-                    {
-                        cmd.Parameters.Clear();
-                        cmd.Parameters.AddWithValue("@RowId", rowId);
-                        int x = _commonServices.excuteQuery_Trans(component.OnCreateProc, ref con, ref sqlTrans, cmd, CommandType.StoredProcedure);
-                    }
-                }
-                else
-                {
-                    if (component.OnUpdateProc != null && component.OnUpdateProc != "")
-                    {
-                        cmd.Parameters.Clear();
-                        cmd.Parameters.AddWithValue("@RowId", rowId);
-                        int x = _commonServices.excuteQuery_Trans(component.OnUpdateProc, ref con, ref sqlTrans, cmd, CommandType.StoredProcedure);
-
-                    }
-                }
-
-                sqlTrans.Commit();
-                session.SetString("Fields" + componentName + rowId, JsonConvert.SerializeObject(fields));
-            }
-            catch (Exception e)
-            {
-                sqlTrans.Rollback();
-                throw;
-            }
-            finally
-            {
-                if (con != null && con.State != ConnectionState.Closed)
-                    con.Close();
-            }
-
-            if (componentName == "CompanyUsers")
-            {
-                return new Dictionary<string, object> { { "RowId", rowId }, { "saveType", saveType } };
-            }
-            return new Dictionary<string, object> { { "RowId", rowId } };
-        }
-
-        public async Task<LoadDataResultDto> ILoadData(LoadDataRequest t, ClaimsPrincipal currentUser)
-        {
-            // -----------------------------------------------
-            // 1. Validate User
-            // -----------------------------------------------
+            // ------------------------------------------------
+            // 1. Validate Authentication
+            // ------------------------------------------------
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            string componentName = t.ComponentName;
-            int pageNumber = t.PageNumber.ToString() == "-1" ? -1 : Convert.ToInt32(t.PageNumber);
+            string componentName = t.ComponentName ?? "";
             string activeRow = string.IsNullOrEmpty(t.SelectedId) ? "-1" : t.SelectedId;
+            int pageNumber = (t.PageNumber == -1) ? -1 : t.PageNumber;
 
             var search = t.Search;
-            var username = currentUser.FindFirst("username").Value;
-            var user = _userManager.FindByNameAsync(username).Result;
+            string connectionString = _commonServices.getConnectionString();
 
-            // -----------------------------------------------
-            // 2. Decode CoreDataView (DTO list)
-            // -----------------------------------------------
-            string base64 = t.CoreDataView;
-            byte[] bytes = Convert.FromBase64String(base64);
-            string json = Encoding.UTF8.GetString(bytes);
+            // load user
+            var username = currentUser.FindFirst("username")?.Value;
+            var user = await _userManager.FindByNameAsync(username);
 
-            var coreViewList =
-                JsonConvert.DeserializeObject<List<LoadViewListItemDto>>(json);
+            // ------------------------------------------------
+            // 2. Decode CoreDataView (RAW JSON → DataShape)
+            // ------------------------------------------------
+            var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "[]")
+                ?? new DataShape();
 
-            // -----------------------------------------------
-            // 3. Find the View Component
-            // -----------------------------------------------
-            var view = coreViewList.First(x => x.CompName == componentName);
+            var coreViewList = CoreDataShapeMapper.FromShape(shape);
 
-            var component = view.Component; // strongly typed
+            // NOTE: There may be multiple views in DataShape (multi-grid)
+            var view = coreViewList.FirstOrDefault(v => v.CompName == componentName);
+            if (view == null)
+                throw new Exception($"View for component '{componentName}' not found in CoreDataView.");
+
+            var component = view.Component;
             string parentField = view.CompFieldName ?? "";
             string parentFieldValue = view.ParCompFieldValue ?? "";
             int viewDataAccess = view.ViewDataAccess;
 
-            string connectionString = _commonServices.getConnectionString();
-
-            // we will reuse this SqlCommand
+            // ------------------------------------------------
+            // 3. Calculate PageNumber for selected row
+            // ------------------------------------------------
             SqlCommand cmd = new SqlCommand();
 
-            // -----------------------------------------------
-            // 4. PAGE NUMBER CALCULATION
-            // -----------------------------------------------
             if (pageNumber == -1)
             {
-                var pageNumberQuery = "SELECT PageNumber FROM (SELECT((ROW_NUMBER() OVER(ORDER BY " + component.SortSpec + ")) / " + component.PageSize + ") +1 AS PageNumber, Id ";
-                pageNumberQuery += "FROM " + component.TableName + ((parentField != "") ? " Where " + parentField + " = @ParentFieldValue" : "");
-                pageNumberQuery += ") A WHERE Id = @RowId";
+                string pageNumberQuery =
+                    "SELECT PageNumber FROM (" +
+                    $"    SELECT ((ROW_NUMBER() OVER (ORDER BY {component.SortSpec})) / {component.PageSize}) + 1 AS PageNumber, Id " +
+                    $"    FROM {component.TableName} " +
+                    (string.IsNullOrEmpty(parentField) ? "" : $" WHERE {parentField} = @ParentFieldValue") +
+                    ") A WHERE Id = @RowId";
 
                 cmd.Parameters.Clear();
-
                 cmd.Parameters.AddWithValue("@RowId", activeRow);
                 cmd.Parameters.AddWithValue("@ParentFieldValue", parentFieldValue);
-                pageNumber = Convert.ToInt32(_commonServices.ExecuteQuery_OneValue(pageNumberQuery, cmd, connectionString));
+
+                pageNumber = Convert.ToInt32(
+                    _commonServices.ExecuteQuery_OneValue(pageNumberQuery, cmd, connectionString)
+                );
+
                 pageNumber = pageNumber < 1 ? 1 : pageNumber;
             }
 
-            // -----------------------------------------------
-            // 5. IF QueryString empty → rebuild everything
-            // -----------------------------------------------
+            // ------------------------------------------------
+            // 4. REBUILD QUERY if:
+            //    ❌ no cached query
+            //    ❌ search is applied
+            //    ❌ new row (-1)
+            // ------------------------------------------------
             string queryText = view.QueryString;
-            string queryTextCount = view.QueryStringCount;
+            string queryCount = view.QueryStringCount;
 
-            List<LoadDataFieldDto> componentFields = null;
-            string tableColumns = "";
-            string queryDataAccess = "";
-            string querySearch = "";
-            ComponentDetail componentDetail;
-            List<ComponentDetail> componentDetailList = new List<ComponentDetail>();
+            bool rebuild =
+                string.IsNullOrEmpty(queryText) || (search != null && search.Any()) || activeRow == "-1";
 
-            if (queryText == "" || queryText == null || (search != null && search.Count() > 0) || activeRow == "-1")
+            if (rebuild)
             {
-                queryText = " Select C.Name ComponentName, C.Title ComponentTitle, C.TableName ComponentTable , C.RowsCount PageSize, C.OnCreateProc, C.OnUpdateProc, C.OnDeleteProc, C.SearchSpec, C.SortSpec, C.Type, ";
-                queryText += "CF.* From Component C , ComponentField CF ";
-                queryText += "Where C.Id = CF.ComponentId And C.Name = @ComponentName Order By DisplaySequence";
-                cmd.Parameters.Clear();
-                cmd.Parameters.AddWithValue("@ComponentName", componentName);
-
-                var fields = new List<ComponentFieldsDto>();
-
-                using var conn = new SqlConnection(_commonServices.getConnectionString());
-                cmd = new SqlCommand(queryText, conn);
-
-                cmd.Parameters.AddWithValue("@ComponentName", componentName);
-
-                await conn.OpenAsync();
-
-                using var reader = await cmd.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
+                _coreData.BuildLoadDataQuery(component: component, view: view, search: search, user: user, cmd: cmd, query: out queryText, queryCount: out queryCount);
+            }
+            else
+            {
+                // restore cmd from Base64 if cached
+                if (!string.IsNullOrWhiteSpace(view.QueryStringCmd))
                 {
-                    var dto = new ComponentFieldsDto
+                    try
                     {
-                        // 🎯 Component (C.*)
-                        ComponentName = reader["ComponentName"]?.ToString() ?? "",
-                        ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? ""),
-                        ComponentTable = reader["ComponentTable"] == DBNull.Value ? null : reader["ComponentTable"].ToString(),
-                        PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
-                        OnCreateProc = reader["OnCreateProc"] == DBNull.Value ? null : reader["OnCreateProc"].ToString(),
-                        OnUpdateProc = reader["OnUpdateProc"] == DBNull.Value ? null : reader["OnUpdateProc"].ToString(),
-                        OnDeleteProc = reader["OnDeleteProc"] == DBNull.Value ? null : reader["OnDeleteProc"].ToString(),
-                        SearchSpec = reader["SearchSpec"] == DBNull.Value ? null : reader["SearchSpec"].ToString(),
-                        SortSpec = reader["SortSpec"] == DBNull.Value ? null : reader["SortSpec"].ToString(),
-                        Type = reader["Type"] == DBNull.Value ? null : reader["Type"].ToString(),
-
-                        Id = Convert.ToInt32(reader["Id"]),
-                        Created = reader.GetDateTime(reader.GetOrdinal("Created")),
-                        CreatedBy = reader["CreatedBy"] == DBNull.Value ? null : reader["CreatedBy"].ToString(),
-                        LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
-                        LastUpdBy = reader["LastUpdBy"] == DBNull.Value ? null : reader["LastUpdBy"].ToString(),
-                        GroupId = reader["GroupId"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("GroupId")),
-
-                        Name = reader["Name"]?.ToString(),
-                        TableName = reader["TableName"]?.ToString(),
-                        Lable = _localResourceService.GetResource(reader["Lable"]?.ToString() ?? ""),
-                        ColumnName = reader["ColumnName"]?.ToString(),
-                        DataType = reader["DataType"]?.ToString(),
-                        DefaultValue = reader["DefaultValue"]?.ToString(),
-
-                        Required = Convert.ToBoolean(reader["Required"]),
-                        ReadOnly = Convert.ToBoolean(reader["ReadOnly"]),
-                        DisplayInList = Convert.ToBoolean(reader["DisplayInList"]),
-                        DisplayInForm = Convert.ToBoolean(reader["DisplayInForm"]),
-
-                        Comment = reader["Comment"]?.ToString(),
-
-                        ComponentId = Convert.ToInt32(reader["ComponentId"]),
-                        DisplaySequence = Convert.ToDecimal(reader["DisplaySequence"]),
-
-                        IsCalc = Convert.ToBoolean(reader["IsCalc"]),
-                        CalcExpr = reader["CalcExpr"]?.ToString(),
-                        HtmlStyle = reader["HtmlStyle"]?.ToString(),
-                        LookUp = reader["LookUp"] == DBNull.Value ? null : reader.GetDecimal(reader.GetOrdinal("LookUp")),
-                        ImmediatePost = Convert.ToBoolean(reader["ImmediatePost"]),
-                        DisplayInPopup = Convert.ToBoolean(reader["DisplayInPopup"]),
-                        FileDataColumn = reader["FileDataColumn"]?.ToString(),
-                        FieldSize = reader["FieldSize"] == DBNull.Value ? null : reader.GetInt32(reader.GetOrdinal("FieldSize")),
-                    };
-
-                    fields.Add(dto);
-                }
-
-                cmd.Parameters.Clear();
-
-                if (component.TableName.ToLower() == "transactions")
-                {
-                    var tableName = _domainRepo.GetGroupByIdAsync(user.UserGroupId).Result?.TransactionsTable;
-                    tableName = String.IsNullOrEmpty(tableName) ? "Transactions" : tableName;
-                    component.TableName = tableName;
-                }
-
-                foreach (var field in fields)
-                {
-
-                    componentDetail = new ComponentDetail();
-                    componentDetail.FieldName = field.Name.ToString();
-                    componentDetail.TableName = field.TableName.ToString();
-                    // for transactions table 
-                    componentDetail.TableName = (componentDetail.TableName.ToLower() == "transactions") ? component.TableName : componentDetail.TableName;
-                    componentDetail.TableColumn = field.ColumnName.ToString();
-                    componentDetail.DataType = field.DataType.ToString();
-                    componentDetail.ReadOnly = Convert.ToBoolean(field.ReadOnly.ToString());
-                    componentDetail.Required = Convert.ToBoolean(field.Required.ToString());
-                    componentDetail.DisplayInForm = Convert.ToBoolean(field.DisplayInForm.ToString());
-                    componentDetail.DisplayInList = Convert.ToBoolean(field.DisplayInList.ToString());
-                    componentDetail.IsCalc = Convert.ToBoolean(field.IsCalc.ToString());
-                    componentDetail.CalcExpression = field.CalcExpr.ToString();
-                    componentDetail.LookUp = (field.LookUp == null) ? "-1" : field.LookUp.ToString();
-                    componentDetailList.Add(componentDetail);
-                    string tableWithColumn = "";
-                    if (componentDetail.DisplayInList)
-                    {
-                        tableWithColumn = (componentDetail.IsCalc && componentDetail.CalcExpression != "")
-                            ? "(" + componentDetail.CalcExpression + ") "
-                            : componentDetail.TableName + "." + componentDetail.TableColumn;
-
-                        if (componentDetail.DataType == "Date")
-                        {
-                            tableColumns += "convert(varchar, " + tableWithColumn + ", 20) " + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "DateTime")
-                        {
-                            tableColumns += "CONVERT(VARCHAR, FORMAT(" + tableWithColumn + ", 'dd/MM/yyyy hh:mm tt')) " + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "Time")
-                        {
-                            tableColumns += "CONVERT(VARCHAR, FORMAT(" + tableWithColumn + ", 'hh:mm tt')) " + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "Color")
-                        {
-                            tableColumns += tableWithColumn + " color_" + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "CheckBox")
-                        {
-                            tableColumns += tableWithColumn + " check_" + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "Decimal")
-                        {
-                            tableColumns += tableWithColumn + " decimal_" + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "InnerButton")
-                        {
-                            tableColumns += tableWithColumn + " button_" + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "File")
-                        {
-                            tableColumns += tableWithColumn + " file_" + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "Button")
-                        {
-                            tableColumns += tableWithColumn + " button_" + componentDetail.FieldName + ",";
-                        }
-                        else if (componentDetail.DataType == "LookUp" && componentDetail.LookUp != "")
-                        {
-                            var LookUpQuery = "SELECT DBO.GetLookUpVal (" + componentDetail.LookUp + ",'" + Thread.CurrentThread.CurrentCulture.Name + "')";
-                            LookUpQuery = _commonServices.ExecuteQuery_OneValue(LookUpQuery, null, _commonServices.getConnectionString());
-                            tableColumns += "(" + LookUpQuery + tableWithColumn + ") " + componentDetail.FieldName + ",";
-                        }
-                        else
-                            tableColumns += tableWithColumn + " " + componentDetail.FieldName + ",";
+                        cmd = _commonServices.GetSqlCommanFromByte(
+                            Convert.FromBase64String(view.QueryStringCmd)
+                        ) ?? new SqlCommand();
                     }
-                    if (componentDetail.FieldName.ToString() == parentField)
+                    catch
                     {
-                        if (componentDetail.IsCalc)
-                        {
-                            view.CompFieldName = componentDetail.CalcExpression;
-                            parentField = componentDetail.CalcExpression;
-                        }
-                        else
-                        {
-                            view.CompFieldName = componentDetail.TableColumn;
-                            parentField = componentDetail.TableName + "." + componentDetail.TableColumn;
-                        }
+                        cmd = new SqlCommand();
                     }
                 }
-
-                if (viewDataAccess == 1) { } // That Mean ALL and no need to add query condition;
-                else if (viewDataAccess == 2) // GROUP
-                {
-                    queryDataAccess = " GroupId in (SELECT ID FROM dbo.GetUserGroups ('" + user.Id + "')) ";
-                }
-                else // USER
-                {
-                    queryDataAccess = " CreatedBy =  '" + user.Id + "' ";
-                }
-
-                //if (search != null)
-                //{
-                //    foreach (var item in search)
-                //    {
-                //        string paramValue = item.Value;
-                //        if (paramValue != "")
-                //        {
-                //            var key = item.Key;
-                //            var dateFromTo = "";
-                //            if (key.Contains("_From") || key.Contains("_To"))
-                //            {
-                //                key = key.Substring(0, key.IndexOf("_"));
-                //                dateFromTo = (item.Key.Contains("_From")) ? "From" : "To";
-                //            }
-
-                //            DataRow[] dr = dataTable.Select("Name = '" + key + "'");//name[0].ToString()
-                //            querySearch += (querySearch != "") ? " AND " : "";
-                //            querySearch += (dr[0]["IsCalc"].ToString() == "True") ? dr[0]["CalcExpr"] : dr[0]["TableName"].ToString() + "." + dr[0]["ColumnName"].ToString();
-
-                //            if (dateFromTo != "")
-                //            {
-                //                querySearch += (dateFromTo == "From") ? " >= " : " <= ";
-                //                querySearch += "@" + key + "_" + dateFromTo;
-                //            }
-                //            else
-                //            {
-                //                querySearch += ((dr[0]["DataType"].ToString().ToLower() == "text") ? " like @" : " = @") + key;
-                //            }
-
-                //            if (dr[0]["DataType"].ToString().ToLower() == "checkbox")
-                //            {
-                //                paramValue = (paramValue == "true") ? "1" : "0";
-                //            }
-
-
-                //            cmd.Parameters.AddWithValue(item.Key,
-                //                (dr[0]["DataType"].ToString().ToLower() == "text") ? "%" + paramValue + "%"
-                //                : (dateFromTo == "To") ? paramValue + " 23:59:59"
-                //                : paramValue
-                //                );
-                //        }
-                //    }
-                //}
-
-                /// this line has been added for the case when parent field value is a calc field
-                //parentField += parentFieldValue;
-
-                queryText = "SELECT " + tableColumns.TrimEnd(',') + " FROM " + component.TableName;
-                queryText += _commonServices.GetQueryWhere(parentField, querySearch, queryDataAccess, component.SearchSpec, user) + " Order By " + component.TableName + "." + component.SortSpec;
-                queryText += " OFFSET @PageSize * (@PageNumber - 1) ROWS FETCH NEXT @PageSize ROWS ONLY OPTION (RECOMPILE)";
-
-                queryText = _coreData.AddUserAttributes(queryText, user);
-
-                // this line has stoped for the case when parent field value is a calc field
-                cmd.Parameters.AddWithValue("@ParentFieldValue", parentFieldValue);
-                cmd.Parameters.AddWithValue("@LangId", user.Language);
-
-                queryTextCount = " SELECT COUNT(1) RecordCount FROM " + component.TableName + _commonServices.GetQueryWhere(parentField, querySearch, queryDataAccess, component.SearchSpec, user);
-
-                //correct transactions table name
-                while (queryText.ToLower().Contains(" transactions.") && component.TableName.ToLower() != "transactions")
-                {
-                    queryText = Regex.Replace(queryText, " transactions\\.", $" {component.TableName}.", RegexOptions.IgnoreCase);
-                    queryTextCount = Regex.Replace(queryTextCount, " transactions\\.", $" {component.TableName}.", RegexOptions.IgnoreCase);
-
-                }
-
-                view.QueryString = queryText;
-                view.QueryStringCount = queryTextCount;
-                view.QueryStringCmd = Convert.ToBase64String(_commonServices.ConvertSqlCommandToByte(cmd));
             }
 
-            // -----------------------------------------------
-            // 6. Execute Query
-            // -----------------------------------------------
+            // ------------------------------------------------
+            // 5. Add paging parameters
+            // ------------------------------------------------
             cmd.Parameters.AddWithValue("@PageSize", component.PageSize);
             cmd.Parameters.AddWithValue("@PageNumber", pageNumber);
 
-            var listDetial =
-                _commonServices.ExecuteListDictionary(queryText, cmd, connectionString);
-
-            int recordCount = Convert.ToInt32(
-                _commonServices.ExecuteQuery_OneValue(queryTextCount, cmd, connectionString)
+            // ------------------------------------------------
+            // 6. Execute the Query
+            // ------------------------------------------------
+            var listDetial = _commonServices.ExecuteListDictionary(
+                queryText,
+                cmd,
+                connectionString
             );
 
-            string appletDisable =
-                string.IsNullOrEmpty(parentFieldValue) || parentFieldValue == "0"
-                ? "disable"
-                : "enable";
+            int recordCount = Convert.ToInt32(
+                _commonServices.ExecuteQuery_OneValue(queryCount, cmd, connectionString)
+            );
 
-            // -----------------------------------------------
-            // 7. Save Updated CoreDataView (DTO)
-            // -----------------------------------------------
-            string updatedJson = JsonConvert.SerializeObject(coreViewList);
-            string updatedBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(updatedJson));
+            bool isAppletDisabled =
+                string.IsNullOrEmpty(parentFieldValue) ||
+                parentFieldValue == "0";
 
+            // ------------------------------------------------
+            // 7. Update DataShape (store query cache)
+            // ------------------------------------------------
+            view.QueryString = queryText;
+            view.QueryStringCount = queryCount;
+            view.QueryStringCmd = Convert.ToBase64String(
+                _commonServices.ConvertSqlCommandToByte(cmd)
+            );
+
+            var updatedShape = CoreDataShapeMapper.ToShape(coreViewList);
+            string updatedCoreJson = JsonConvert.SerializeObject(updatedShape);
+
+            // ------------------------------------------------
+            // 8. Final Response
+            // ------------------------------------------------
             return new LoadDataResultDto
             {
                 ListDetial = listDetial,
                 RecordCount = recordCount,
                 PageSize = component.PageSize,
-                AppletDisable = appletDisable,
+                AppletDisable = isAppletDisabled ? "disable" : "enable",
+
                 UpdatedSession = new Dictionary<string, object>
                 {
-                    { "CoreDataView", updatedBase64 }
+                    { "CoreDataView", updatedCoreJson }
                 }
             };
         }
-        
-        public object ILoadDetailData(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
-        {
-            var componentName = t["componentName"].ToString();
-            var activeRow = t["selectedId"].ToString();
-            DataRow[] dataRow;
 
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
+
+
+        public async Task<LoadDetailDataResponse> ILoadDetailData(Dictionary<string, string> t, ClaimsPrincipal currentUser)
+        {
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not authorized or session timeout", "401");
+
+            if (!t.TryGetValue("componentName", out var componentName) || string.IsNullOrEmpty(componentName))
+                throw new Exception("componentName is required");
+
+            if (!t.TryGetValue("selectedId", out var activeRow))
+                activeRow = "-1";
+
+            // ---------------------------------------------------------
+            // 1. Decode CoreDataView (RAW JSON)
+            // ---------------------------------------------------------
+            var coreViewJson = t["CoreDataView"];
+            var coreViewList = JsonConvert.DeserializeObject<List<LoadViewListItemDto>>(coreViewJson)
+                               ?? new List<LoadViewListItemDto>();
+
+            // ---------------------------------------------------------
+            // 2. Find detail components where ParCompName = parent component
+            // ---------------------------------------------------------
+            var detailItems = coreViewList
+                .Where(x => x.ParCompName == componentName)
+                .ToList();
+
+            if (detailItems.Count == 0)
             {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
+                return new LoadDetailDataResponse
+                {
+                    ListDetial = new List<LoadDetailItemDto>(),
+                    UpdatedSession = coreViewJson
+                };
             }
 
-            var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-
-            dataRow = coreDataView.Select("ParCompName = '" + componentName + "'");
             string connectionString = _commonServices.getConnectionString();
 
-            string pareCompFeildValue = "";
-            for (int i = 0; i < dataRow.Length; i++)
+            foreach (var item in detailItems)
             {
-                var componentJson = coreDataView.Select("CompName = '" + componentName + "'")[0]["Component"].ToString();
-                Component component = JsonConvert.DeserializeObject<Component>(componentJson);
+                var component = item.Component;
+                string parField = item.ParCompFieldName;
 
-                var parCompFieldName = dataRow[i]["ParCompFieldName"]?.ToString();
-                var parentComponent = dataRow[i]["ParCompFieldName"]?.ToString();
-                if (!string.IsNullOrEmpty(parCompFieldName) &&
-                    parCompFieldName.ToLower() != "id" &&
-                    parCompFieldName.ToLower() != "rowid")
+                // ---------------------------------------------------------
+                // 3. Resolve parent field value
+                // ---------------------------------------------------------
+                string parentValue = "";
+
+                if (!string.IsNullOrEmpty(parField) &&
+                    parField.ToLower() != "id" &&
+                    parField.ToLower() != "rowid")
                 {
-                    // Validate activeRow
-                    if (string.IsNullOrEmpty(activeRow))
-                    {
-                        pareCompFeildValue = "";
-                    }
-                    else
-                    {
-                        // If Id is not numeric, quote it
-                        string idValue = int.TryParse(activeRow, out _) ? activeRow : $"'{activeRow}'";
+                    // If the ID is numeric, use directly. Otherwise wrap in quotes.
+                    var idValue = int.TryParse(activeRow, out _) ? activeRow : $"'{activeRow}'";
 
-                        var getParentFieldColumnQuery = $"SELECT CASE WHEN ISCALC = 0 THEN  ColumnName ELSE CalcExpr END FROM ComponentField WHERE ComponentId = (SELECT MAX(ID) FROM Component WHERE NAME = '{componentName}') AND Name = '{parCompFieldName}'  ";
-                        var parentCompColumn = _commonServices.ExecuteQuery_OneValue(getParentFieldColumnQuery, null, connectionString);
-                        string subQuery = $"SELECT {parentCompColumn} FROM {component.TableName} WHERE Id = {idValue}";
-                        pareCompFeildValue = _commonServices.ExecuteQuery_OneValue(subQuery, null, connectionString);
-                    }
+                    var parentColumnQuery =
+                        $"SELECT CASE WHEN IsCalc = 0 THEN ColumnName ELSE CalcExpr END " +
+                        $"FROM ComponentField " +
+                        $"WHERE ComponentId = (SELECT MAX(Id) FROM Component WHERE Name = '{componentName}') " +
+                        $"AND Name = '{parField}'";
+
+                    var parentColumn = _commonServices.ExecuteQuery_OneValue(parentColumnQuery, null, connectionString);
+
+                    string valueQuery = $"SELECT {parentColumn} FROM {component.TableName} WHERE Id = {idValue}";
+                    parentValue = _commonServices.ExecuteQuery_OneValue(valueQuery, null, connectionString);
                 }
                 else
                 {
-                    pareCompFeildValue = activeRow;
+                    parentValue = activeRow; // default behaviour
                 }
 
-                dataRow[i]["ParCompFieldValue"] = pareCompFeildValue;
+                item.ParCompFieldValue = parentValue;
             }
 
-            DataTable dt = null;
+            // ---------------------------------------------------------
+            // 4. Return only detail metadata (strongly typed)
+            // ---------------------------------------------------------
+            var resultList = detailItems
+                .Select(x => new LoadDetailItemDto
+                {
+                    Seq = x.Seq,
+                    ClientURL = x.ClientURL,
+                    ViewTitle = x.ViewTitle,
+                    ViewId = x.ViewId,
+                    CompId = x.CompId,
+                    CompName = x.CompName,
+                    CompTitle = x.CompTitle,
+                    CompFieldId = x.CompFieldId,
+                    ParCompId = x.ParCompId,
+                    ParCompName = x.ParCompName,
+                    ParCompFieldId = x.ParCompFieldId,
+                    ParCompFieldName = x.ParCompFieldName,
+                    ParCompFieldValue = x.ParCompFieldValue,
+                    ReadOnly = x.ReadOnly,
+                    Component = x.Component // if needed by UI
+                })
+                .ToList();
 
-            if (dataRow != null && dataRow.Length > 0)
+            // ---------------------------------------------------------
+            // 5. Save updated CoreDataView (RAW JSON)
+            // ---------------------------------------------------------
+            string updatedJson = JsonConvert.SerializeObject(coreViewList);
+
+            return new LoadDetailDataResponse
             {
-                dt = dataRow.CopyToDataTable();
-
-                dt.Columns.Remove("Component");
-                dt.Columns.Remove("QueryString");
-                dt.Columns.Remove("QueryStringCount");
-                dt.Columns.Remove("QueryStringCmd");
-            }
-            session.Set("CoreDataView", _commonServices.DataTableToByteArray(coreDataView));
-            return new Dictionary<string, object> { { "ListDetial", dt } };
+                ListDetial = resultList,     
+                UpdatedSession = updatedJson   
+            };
         }
 
         public async Task<EditRowResultDto> IEditRowData(EditRowRequest t, ClaimsPrincipal currentUser)
         {
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
+            if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            string componentName = "CompanyUsers";
-            string selectedId = "-1";
+            string componentName = t.ComponentName;
+            string selectedId = string.IsNullOrWhiteSpace(t.SelectedId) ? "-1" : t.SelectedId;
 
-            // -----------------------------
-            // 1. Load CoreDataView (DTO list)
-            // -----------------------------
-            var coreViewBase64 = t.CoreDataView;
-            var coreJson = Encoding.UTF8.GetString(Convert.FromBase64String(coreViewBase64));
-            var coreViewList = JsonConvert.DeserializeObject<List<LoadViewListItemDto>>(coreJson);
+            // ---------------------------------------------------------
+            // 1. Convert CoreDataView JSON → DataShape → List<Dto>
+            // ---------------------------------------------------------
+            var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "{}")
+                        ?? new DataShape();
 
-            // -----------------------------
-            // 2. Load Fields cache
-            // -----------------------------
-            var fieldsCacheJson = t.FieldsCache ?? "[]";
+            var coreViewList = CoreDataShapeMapper.FromShape(shape);
 
-            // FIX: handle [] or empty JSON safely
-            Dictionary<string, List<Fields>> fieldsCache;
+            // ---------------------------------------------------------
+            // 2. Load FieldsCache JSON
+            // ---------------------------------------------------------
+            Dictionary<string, List<Fields>> fieldsCache =
+                string.IsNullOrWhiteSpace(t.FieldsCache)
+                ? new Dictionary<string, List<Fields>>()
+                : JsonConvert.DeserializeObject<Dictionary<string, List<Fields>>>(t.FieldsCache)
+                    ?? new Dictionary<string, List<Fields>>();
 
-            if (string.IsNullOrWhiteSpace(fieldsCacheJson) ||
-                fieldsCacheJson.TrimStart().StartsWith("["))
-            {
-                // Means it's [] → cannot be deserialized into Dictionary
-                fieldsCache = new Dictionary<string, List<Fields>>();
-            }
-            else
-            {
-                fieldsCache = JsonConvert.DeserializeObject<Dictionary<string, List<Fields>>>(fieldsCacheJson)
-                              ?? new Dictionary<string, List<Fields>>();
-            }
+            string cacheKey = componentName + selectedId;
 
-
-            var key = componentName + selectedId;
             var username = currentUser.FindFirst("username")?.Value;
-            var user = _userManager.FindByNameAsync(username).Result;
+            var user = await _userManager.FindByNameAsync(username);
 
-            // -----------------------------
-            // 3. Validate & prepare Fields
-            // -----------------------------
-            List<Fields> fields;
+            // ---------------------------------------------------------
+            // 3. Get component definition from the view list
+            // ---------------------------------------------------------
+            var viewItem = coreViewList.FirstOrDefault(x => x.CompName == componentName);
+            if (viewItem == null)
+                throw new Exception($"Component {componentName} not found.");
 
-            if (!fieldsCache.TryGetValue(key, out fields))
+            var component = viewItem.Component;
+
+            // ---------------------------------------------------------
+            // 4. If fields exist in cache → return cached version
+            // ---------------------------------------------------------
+            if (fieldsCache.TryGetValue(cacheKey, out var cachedFields))
             {
-                fields = _coreData.InitFields(coreViewList, componentName, selectedId, user);
-                fieldsCache[key] = fields;
+                // REBUILD datashape again (important!)
+                var updatedShape = CoreDataShapeMapper.ToShape(coreViewList);
+                string updatedJson = JsonConvert.SerializeObject(updatedShape);
+
+                return new EditRowResultDto
+                {
+                    ListDetial = cachedFields,
+                    UpdatedSession = new Dictionary<string, object>
+                    {
+                        { "CoreDataView", updatedJson },
+                        { "FieldsCache", JsonConvert.SerializeObject(fieldsCache) }
+                    }
+                };
             }
 
-            // -----------------------------
-            // 4. Return + update session
-            // -----------------------------
-            var updatedCoreBase64 = Convert.ToBase64String(
-                Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(coreViewList)));
+            // ---------------------------------------------------------
+            // 5. Build fields fresh (strong version)
+            // ---------------------------------------------------------
+            var fields = await _coreData.InitFieldsStrong(component, selectedId, user);
 
-            var updatedFieldsJson =
-                JsonConvert.SerializeObject(fieldsCache);
+            fieldsCache[cacheKey] = fields;
+
+            // ---------------------------------------------------------
+            // 6. Rebuild DataShape → JSON
+            // ---------------------------------------------------------
+            var newShape = CoreDataShapeMapper.ToShape(coreViewList);
+            string newJson = JsonConvert.SerializeObject(newShape);
 
             return new EditRowResultDto
             {
                 ListDetial = fields,
-
                 UpdatedSession = new Dictionary<string, object>
                 {
-                    { "CoreDataView", updatedCoreBase64 },
-                    { "FieldsCache", updatedFieldsJson }
+                    { "CoreDataView", newJson },
+                    { "FieldsCache", JsonConvert.SerializeObject(fieldsCache) }
                 }
             };
         }
@@ -1196,66 +1075,66 @@ namespace DomainServices.Services
             return new Dictionary<string, object> { { "ExceptionError", "الملف غير موجود" } };
         }
 
-        public DataTable IExportExcel(string componentName, ISession session)
-        {
-            string queryText = "";
-            SqlCommand cmd = new SqlCommand();
+        //public DataTable IExportExcel(string componentName, ISession session)
+        //{
+        //    string queryText = "";
+        //    SqlCommand cmd = new SqlCommand();
 
-            // Get the stored CoreDataView from session
-            var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-            DataRow[] dataRow = coreDataView.Select("CompName = '" + componentName + "'");
+        //    // Get the stored CoreDataView from session
+        //    var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
+        //    DataRow[] dataRow = coreDataView.Select("CompName = '" + componentName + "'");
 
-            cmd = _commonServices.GetSqlCommanFromByte(dataRow[0]["QueryStringCmd"] as byte[]);
-            queryText = dataRow[0]["QueryString"].ToString();
+        //    cmd = _commonServices.GetSqlCommanFromByte(dataRow[0]["QueryStringCmd"] as byte[]);
+        //    queryText = dataRow[0]["QueryString"].ToString();
 
-            // ✅ Ensure CommandText is set
-            cmd.CommandText = queryText;
+        //    // ✅ Ensure CommandText is set
+        //    cmd.CommandText = queryText;
 
-            cmd.Parameters.AddWithValue("@PageNumber", 1);
-            cmd.Parameters.AddWithValue("@PageSize", 1000000);
+        //    cmd.Parameters.AddWithValue("@PageNumber", 1);
+        //    cmd.Parameters.AddWithValue("@PageSize", 1000000);
 
-            DataTable dt = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
+        //    DataTable dt = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
 
-            // Remove specific rows for CompanyUsers
-            if (componentName == "CompanyUsers")
-            {
-                var rowsToRemove = dt.AsEnumerable()
-                                     .Where(row => row["Idno"].ToString() == "1233441000")
-                                     .ToList();
+        //    // Remove specific rows for CompanyUsers
+        //    if (componentName == "CompanyUsers")
+        //    {
+        //        var rowsToRemove = dt.AsEnumerable()
+        //                             .Where(row => row["Idno"].ToString() == "1233441000")
+        //                             .ToList();
 
-                foreach (var row in rowsToRemove)
-                {
-                    dt.Rows.Remove(row);
-                }
-            }
+        //        foreach (var row in rowsToRemove)
+        //        {
+        //            dt.Rows.Remove(row);
+        //        }
+        //    }
 
-            // Fix table headers (rename columns)
-            var fields = _coreData.GetComponentFields(componentName);
+        //    // Fix table headers (rename columns)
+        //    var fields = _coreData.GetComponentFields(componentName);
 
-            for (int i = 0; i < fields.Rows.Count; i++)
-            {
-                string oldColumnName = fields.Rows[i].ItemArray[11].ToString(); // current column name in dt
-                string newColumnName = fields.Rows[i].ItemArray[13].ToString(); // desired display name
+        //    for (int i = 0; i < fields.Rows.Count; i++)
+        //    {
+        //        string oldColumnName = fields.Rows[i].ItemArray[11].ToString(); // current column name in dt
+        //        string newColumnName = fields.Rows[i].ItemArray[13].ToString(); // desired display name
 
-                // Skip "TransNo" entirely
-                if (oldColumnName == "TransNo")
-                    continue;
+        //        // Skip "TransNo" entirely
+        //        if (oldColumnName == "TransNo")
+        //            continue;
 
-                // Ensure the column exists and the new name is not a duplicate
-                if (dt.Columns.Contains(oldColumnName) && !dt.Columns.Contains(newColumnName))
-                {
-                    dt.Columns[oldColumnName].ColumnName = newColumnName;
-                }
-            }
+        //        // Ensure the column exists and the new name is not a duplicate
+        //        if (dt.Columns.Contains(oldColumnName) && !dt.Columns.Contains(newColumnName))
+        //        {
+        //            dt.Columns[oldColumnName].ColumnName = newColumnName;
+        //        }
+        //    }
 
-            // 🚨 Remove the TransNo column completely if it still exists
-            if (dt.Columns.Contains("TransNo"))
-            {
-                dt.Columns.Remove("TransNo");
-            }
+        //    // 🚨 Remove the TransNo column completely if it still exists
+        //    if (dt.Columns.Contains("TransNo"))
+        //    {
+        //        dt.Columns.Remove("TransNo");
+        //    }
 
-            return dt;
-        }
+        //    return dt;
+        //}
 
 
         public object ISetApplicationTheme(Dictionary<string, string> t, ClaimsPrincipal currentUser)

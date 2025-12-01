@@ -44,8 +44,7 @@ namespace DomainServices.Controllers
         }
 
 
-        [Authorize]
-        [HttpGet("GetUserViews")]
+        [Authorize, HttpGet("GetUserViews")]
         public async Task<IActionResult> GetUserViews()
         {
             var result = await _coreService.IGetUserViewsAsync(HttpContext.User);
@@ -82,9 +81,9 @@ namespace DomainServices.Controllers
             var data = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["data"].ToString());
             var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
 
-            var result = _coreService.ISubmitData(data, HttpContext.User, HttpContext.Session);
+            //var result = _coreService.ISubmitData(data, HttpContext.User, HttpContext.Session);
 
-            return Ok(result);
+            return Ok();
         }
 
         [HttpPost("LoadData")]
@@ -114,7 +113,7 @@ namespace DomainServices.Controllers
             {
                 var result = await _coreService.IEditRowData(data, User);
 
-                return Ok();
+                return Ok(result);
             }
             catch (Exception ex)
             {
@@ -160,65 +159,65 @@ namespace DomainServices.Controllers
         }
 
 
-        [Authorize]
-        [HttpGet]
-        [Route("ExportExcel")]
-        public IActionResult ExportExcel(string componentName)
-        {
-            try
-            {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest("Invalid Session | " + userName);
-                }
-                DataTable dt = _coreService.IExportExcel(componentName, HttpContext.Session);
+        //[Authorize]
+        //[HttpGet]
+        //[Route("ExportExcel")]
+        //public IActionResult ExportExcel(string componentName)
+        //{
+        //    try
+        //    {
+        //        var sessionKey = HttpContext.Session.GetString("sessionKey");
+        //        var userName = User.Identity.Name;
+        //        if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
+        //        {
+        //            return BadRequest("Invalid Session | " + userName);
+        //        }
+        //        DataTable dt = _coreService.IExportExcel(componentName, HttpContext.Session);
 
-                if (dt != null && dt.Rows.Count > 0)
-                {
-                    string fileName = componentName + ".xlsx";
-                    string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        //        if (dt != null && dt.Rows.Count > 0)
+        //        {
+        //            string fileName = componentName + ".xlsx";
+        //            string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-                    var stream = _commonServices.ExportDataTable("Approvers", dt);
+        //            var stream = _commonServices.ExportDataTable("Approvers", dt);
 
-                    return File(stream, contentType, fileName);
-                }
-                else
-                {
-                    ExcelPackage.License.SetNonCommercialPersonal("Colllecta");
-                    using (var package = new ExcelPackage())
-                    {
-                        var worksheet = package.Workbook.Worksheets.Add("Sheet1");
-                        Color myColor = Color.FromArgb(102, 68, 38, 207);
+        //            return File(stream, contentType, fileName);
+        //        }
+        //        else
+        //        {
+        //            ExcelPackage.License.SetNonCommercialPersonal("Colllecta");
+        //            using (var package = new ExcelPackage())
+        //            {
+        //                var worksheet = package.Workbook.Worksheets.Add("Sheet1");
+        //                Color myColor = Color.FromArgb(102, 68, 38, 207);
 
-                        // Add column headers and set their style
-                        for (int i = 0; i < dt.Columns.Count; i++)
-                        {
-                            worksheet.Cells[1, i + 1].Value = dt.Columns[i].ColumnName;
-                            worksheet.Cells[1, i + 1].Style.Font.Bold = true; // Make text bold
-                            worksheet.Cells[1, i + 1].Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid; // Set fill pattern
-                            worksheet.Cells[1, i + 1].Style.Fill.BackgroundColor.SetColor(myColor); // Set background color
-                            worksheet.Cells[1, i + 1].Style.Font.Color.SetColor(System.Drawing.Color.White); // Set text color to white
-                        }
+        //                // Add column headers and set their style
+        //                for (int i = 0; i < dt.Columns.Count; i++)
+        //                {
+        //                    worksheet.Cells[1, i + 1].Value = dt.Columns[i].ColumnName;
+        //                    worksheet.Cells[1, i + 1].Style.Font.Bold = true; // Make text bold
+        //                    worksheet.Cells[1, i + 1].Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid; // Set fill pattern
+        //                    worksheet.Cells[1, i + 1].Style.Fill.BackgroundColor.SetColor(myColor); // Set background color
+        //                    worksheet.Cells[1, i + 1].Style.Font.Color.SetColor(System.Drawing.Color.White); // Set text color to white
+        //                }
 
-                        worksheet.Cells.AutoFitColumns();
-                        var stream = new MemoryStream();
-                        package.SaveAs(stream);
-                        string fileName = componentName + ".xlsx";
-                        string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-                        return File(stream.ToArray(), contentType, fileName);
-                    }
-                }
-            }
-            catch (Exception err)
-            {
-                return BadRequest(new
-                {
-                    ExceptionError = _commonServices.getExceptionErrorMessage(err)
-                });
-            }
-        }
+        //                worksheet.Cells.AutoFitColumns();
+        //                var stream = new MemoryStream();
+        //                package.SaveAs(stream);
+        //                string fileName = componentName + ".xlsx";
+        //                string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        //                return File(stream.ToArray(), contentType, fileName);
+        //            }
+        //        }
+        //    }
+        //    catch (Exception err)
+        //    {
+        //        return BadRequest(new
+        //        {
+        //            ExceptionError = _commonServices.getExceptionErrorMessage(err)
+        //        });
+        //    }
+        //}
 
         [ValidateAntiForgeryToken]
         [Authorize]

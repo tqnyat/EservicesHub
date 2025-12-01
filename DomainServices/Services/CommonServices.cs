@@ -15,6 +15,7 @@ using System.Globalization;
 using System.Net;
 using System.Runtime.Serialization;
 using System.Security.Permissions;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -63,6 +64,143 @@ namespace DomainServices.Services
         #endregion
 
         #region Methods
+        public DataShape ExecuteQuery_DataShape(string query, SqlCommand cmd, string connectionString = null)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                connectionString = getConnectionString();
+
+            using var con = new SqlConnection(connectionString);
+            cmd.Connection = con;
+            con.Open();
+
+            using var reader = cmd.ExecuteReader();
+            var dataShape = new DataShape();
+
+            // Build columns
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                dataShape.Columns.Add(new ColumnShape
+                {
+                    Name = reader.GetName(i),
+                    DataType = reader.GetFieldType(i).Name,
+                    ReadOnly = false,
+                    Required = false
+                });
+            }
+
+            // Build rows
+            while (reader.Read())
+            {
+                var row = new Dictionary<string, object>();
+
+                for (int i = 0; i < reader.FieldCount; i++)
+                {
+                    row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                }
+
+                dataShape.Rows.Add(row);
+            }
+
+            return dataShape;
+        }
+
+        public Dictionary<string, object> ExecuteQuery_Row(string query, SqlCommand cmd, string connectionString = null)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                connectionString = getConnectionString();
+
+            using var con = new SqlConnection(connectionString);
+            cmd.Connection = con;
+            con.Open();
+
+            using var reader = cmd.ExecuteReader();
+
+            if (!reader.Read())
+                return new Dictionary<string, object>();
+
+            var row = new Dictionary<string, object>();
+
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            }
+
+            return row;
+        }
+
+        public object ExecuteQuery_Value(string query, SqlCommand cmd, string connectionString = null)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                connectionString = getConnectionString();
+
+            using var con = new SqlConnection(connectionString);
+            cmd.Connection = con;
+            con.Open();
+
+            return cmd.ExecuteScalar();
+        }
+
+        public List<Dictionary<string, object>> ExecuteQuery_List(string query, SqlCommand cmd, string connectionString = null)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                connectionString = getConnectionString();
+
+            using var con = new SqlConnection(connectionString);
+            cmd.Connection = con;
+            con.Open();
+
+            using var reader = cmd.ExecuteReader();
+            var list = new List<Dictionary<string, object>>();
+
+            while (reader.Read())
+            {
+                var row = new Dictionary<string, object>();
+
+                for (int i = 0; i < reader.FieldCount; i++)
+                {
+                    row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                }
+
+                list.Add(row);
+            }
+
+            return list;
+        }
+
+        public async Task<Dictionary<string, object>> ExecuteSingleRow(
+    string sql, SqlCommand cmd, string connectionString = null)
+        {
+            if (cmd == null)
+                cmd = new SqlCommand();
+
+            if (string.IsNullOrEmpty(connectionString))
+                connectionString = getConnectionString();
+
+            var result = new Dictionary<string, object>();
+
+            using (var conn = new SqlConnection(connectionString))
+            {
+                cmd.Connection = conn;
+                cmd.CommandText = sql;
+                cmd.CommandType = CommandType.Text;
+
+                await conn.OpenAsync();
+                using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SingleRow);
+
+                if (await reader.ReadAsync())
+                {
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        string name = reader.GetName(i);
+                        object value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                        result[name] = value;
+                    }
+                }
+            }
+
+            return result;
+        }
+
 
         public DataTable getDataTableFromQuery(string query, SqlCommand cmd, string ConnectionString = null, CommandType commandType = CommandType.Text)
         {
@@ -602,6 +740,44 @@ namespace DomainServices.Services
             return System.Text.Encoding.UTF8.GetBytes(json);
         }
 
+        public SqlCommand ConvertByteToSqlCommand(byte[] bytes)
+        {
+            var cmd = new SqlCommand();
+
+            if (bytes == null || bytes.Length == 0)
+                return cmd;
+
+            string json = Encoding.UTF8.GetString(bytes);
+
+            var list = JsonConvert.DeserializeObject<List<SqlParamDto>>(json)
+                       ?? new List<SqlParamDto>();
+
+            foreach (var p in list)
+            {
+                var sqlType = SqlDbType.VarChar; // safe default
+
+                try
+                {
+                    sqlType = (SqlDbType)Enum.Parse(typeof(SqlDbType), p.Type, true);
+                }
+                catch { /* fallback */ }
+
+                var param = new SqlParameter(p.Name, sqlType)
+                {
+                    Value = p.Value ?? DBNull.Value
+                };
+
+                cmd.Parameters.Add(param);
+            }
+
+            return cmd;
+        }
+        private class SqlParamDto
+        {
+            public string Name { get; set; }
+            public object Value { get; set; }
+            public string Type { get; set; }
+        }
         public SqlCommand GetSqlCommanFromByte(byte[] cmdByte)
         {
             var cmd = new SqlCommand();
@@ -834,6 +1010,11 @@ namespace DomainServices.Services
         {
             var result = new List<Dictionary<string, object>>();
 
+            // -----------------------------
+            // FIX 1: Auto-correct bad SQL spacing
+            // -----------------------------
+            sql = FixSql(sql);
+
             using (var conn = new SqlConnection(connectionString))
             {
                 cmd.Connection = conn;
@@ -860,6 +1041,38 @@ namespace DomainServices.Services
 
             return result;
         }
+        private string FixSql(string sql)
+        {
+            if (string.IsNullOrWhiteSpace(sql))
+                return sql;
+
+            // Remove double spaces
+            sql = Regex.Replace(sql, @"\s{2,}", " ");
+
+            // Ensure WHERE has space before it
+            sql = Regex.Replace(sql, @"([A-Za-z0-9_])Where", "$1 WHERE", RegexOptions.IgnoreCase);
+
+            // Ensure ORDER BY has space
+            sql = Regex.Replace(sql, @"([A-Za-z0-9_])Order\s+By", "$1 ORDER BY", RegexOptions.IgnoreCase);
+
+            // Ensure OFFSET has space
+            sql = Regex.Replace(sql, @"([A-Za-z0-9_])OFFSET", "$1 OFFSET", RegexOptions.IgnoreCase);
+
+            // Ensure FETCH has space
+            sql = Regex.Replace(sql, @"([A-Za-z0-9_])FETCH", "$1 FETCH", RegexOptions.IgnoreCase);
+
+            // Remove "WHERE AND"
+            sql = Regex.Replace(sql, @"WHERE\s+AND", "WHERE", RegexOptions.IgnoreCase);
+
+            // Remove trailing AND
+            sql = Regex.Replace(sql, @"AND\s*$", "", RegexOptions.IgnoreCase);
+
+            // Remove trailing WHERE
+            sql = Regex.Replace(sql, @"WHERE\s*$", "", RegexOptions.IgnoreCase);
+
+            return sql.Trim();
+        }
+
         public string BuildSqlColumn(string expr, LoadDataFieldDto f)
         {
             return f.DataType switch
