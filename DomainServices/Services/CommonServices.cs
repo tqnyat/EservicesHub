@@ -70,7 +70,12 @@ namespace DomainServices.Services
                 connectionString = getConnectionString();
 
             using var con = new SqlConnection(connectionString);
+
             cmd.Connection = con;
+
+            // THIS WAS MISSING → your query never executed
+            cmd.CommandText = query;
+
             con.Open();
 
             using var reader = cmd.ExecuteReader();
@@ -201,6 +206,59 @@ namespace DomainServices.Services
             return result;
         }
 
+        public async Task<DataShape> GetDataShapeFromQuery(string query, SqlCommand cmd, string connectionString = null, CommandType commandType = CommandType.Text)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                connectionString = getConnectionString();
+
+            using var con = new SqlConnection(connectionString);
+            using var da = new SqlDataAdapter();
+
+            if (cmd == null)
+                cmd = new SqlCommand();
+
+            cmd.Connection = con;
+            cmd.CommandType = commandType;
+            cmd.CommandText = query;
+
+            da.SelectCommand = cmd;
+
+            var dt = new DataTable();
+            da.Fill(dt);
+
+            // -----------------------------
+            // Convert DataTable → DataShape
+            // -----------------------------
+            var shape = new DataShape();
+
+            // Add columns
+            foreach (DataColumn col in dt.Columns)
+            {
+                shape.Columns.Add(new ColumnShape
+                {
+                    Name = col.ColumnName,
+                    DataType = col.DataType.Name,
+                    ReadOnly = col.ReadOnly,
+                    Required = false
+                });
+            }
+
+            // Add rows
+            foreach (DataRow dr in dt.Rows)
+            {
+                var rowDict = new Dictionary<string, object>();
+
+                foreach (DataColumn col in dt.Columns)
+                {
+                    rowDict[col.ColumnName] =
+                        dr[col] == DBNull.Value ? null : dr[col];
+                }
+
+                shape.Rows.Add(rowDict);
+            }
+
+            return shape;
+        }
 
         public DataTable getDataTableFromQuery(string query, SqlCommand cmd, string ConnectionString = null, CommandType commandType = CommandType.Text)
         {
@@ -536,197 +594,6 @@ namespace DomainServices.Services
             return queryText;
         }
         
-        public Stream ExportDataTable(string workSheetName, DataTable dataTable)
-        {
-            ExcelPackage.License.SetNonCommercialPersonal("Colllecta");
-            using (ExcelPackage pkg = new ExcelPackage())
-            {
-                ExcelWorksheet ws = pkg.Workbook.Worksheets.Add(workSheetName);
-                var isRightToLeft = CultureInfo.CurrentCulture.TextInfo.IsRightToLeft;
-                ws.View.RightToLeft = (isRightToLeft) ? true : false;
-                var alignment = isRightToLeft ? ExcelHorizontalAlignment.Right : ExcelHorizontalAlignment.Left;
-                ExcelRange range = null;
-                var columnDeleted = 0;
-                var columnToBeDeleted = 0;
-                // Set columns number format
-                List<string> columnsToDelete = new List<string>();
-
-                foreach (DataRow dr in dataTable.Rows)
-                {
-                    for (int i = 1; i < dataTable.Columns.Count + 1; i++)
-                    {
-                        if (dataTable.Columns[i - 1].ColumnName.Contains("check_"))
-                        {
-                            // Create a new column with string datatype
-                            string newColumnName = "System.Field." + dataTable.Columns[i - 1].ColumnName.Replace("check_", "");
-                            if (!dataTable.Columns.Contains(newColumnName))
-                            {
-                                dataTable.Columns.Add(new DataColumn(newColumnName, typeof(string)));
-                            }
-
-                            // Convert values and copy them to the new column
-                            foreach (DataRow row in dataTable.Rows)
-                            {
-                                var oldValue = row[dataTable.Columns[i - 1].ColumnName].ToString();
-                                if (oldValue == "0")
-                                {
-                                    row[newColumnName] = _localResourceService.GetResource("System.Field.No");
-                                }
-                                else if (oldValue == "1")
-                                {
-                                    row[newColumnName] = _localResourceService.GetResource("System.Field.Yes");
-                                }
-                                else
-                                {
-                                    row[newColumnName] = oldValue; // Preserve original value if not 0 or 1
-                                }
-                            }
-
-                            // Mark old column for deletion
-                            columnsToDelete.Add(dataTable.Columns[i - 1].ColumnName);
-                        }
-                    }
-                }
-                foreach (var columnName in columnsToDelete)
-                {
-                    if (dataTable.Columns.Contains(columnName))
-                    {
-                        dataTable.Columns.Remove(columnName);
-                    }
-                }
-                for (int i = 1; i <= dataTable.Columns.Count; i++)
-                {
-                    if (dataTable.Columns[i - 1].ColumnName.Contains("button_") ||
-                        dataTable.Columns[i - 1].ColumnName.Contains("RowId") ||
-                            ContainsArabicLetters(dataTable.Columns[i - 1].ColumnName))
-                    {
-                        columnDeleted++;
-                        continue;
-                    }
-                    range = ws.Cells[2, i, dataTable.Rows.Count + 1, i];
-
-                        if (dataTable.Columns[i - 1].DataType == typeof(String))
-                        range.Style.Numberformat.Format = "@";
-                    else if (dataTable.Columns[i - 1].DataType == typeof(Decimal))
-                    {
-                        if(dataTable.Columns[i - 1].ColumnName.Contains("Percentage"))
-                        {
-                            range.Style.Numberformat.Format = "0%";
-                        }
-                        else
-                        {
-                            range.Style.Numberformat.Format = "#.00";
-                        }
-                        
-                    }
-                    else if (dataTable.Columns[i - 1].DataType == typeof(Int32) || dataTable.Columns[i - 1].DataType == typeof(Int64))
-                        range.Style.Numberformat.Format = "0";
-                    range.Style.HorizontalAlignment = alignment;
-                }
-
-                int rowCount = 1;
-                
-                foreach (DataRow dr in dataTable.Rows)
-                {
-                    rowCount += 1;
-                    int columnCount = 1; // Track the current column index
-                    for (int i = 1; i < dataTable.Columns.Count + 1; i++)
-                    {
-                         if (dataTable.Columns[i - 1].ColumnName.Contains("button_") ||
-                            dataTable.Columns[i - 1].ColumnName.Contains("RowId") ||
-                            ContainsArabicLetters(dataTable.Columns[i - 1].ColumnName)) {
-                            continue;   
-                        }
-                       
-                        if (dataTable.Columns[i - 1].ColumnName.Contains("decimal_"))
-                        {
-                            dataTable.Columns[i - 1].ColumnName = "System.Field." + dataTable.Columns[i - 1].ColumnName.Replace("decimal_", "");
-                        }
-                            // Add the header the first time through 
-                        if (rowCount == 2)
-                        {
-                            ws.Cells[1, columnCount].Value = _localResourceService.GetResource(dataTable.Columns[i - 1].ColumnName);
-                        }
-
-                        // Check if the column contains HTML tags
-                        if (!ContainsHtmlTags(dr[i - 1].ToString()))
-                        {
-                            if (dataTable.Columns[i - 1].DataType == typeof(DateTime))
-                                ws.Cells[rowCount, columnCount].Value = (dr[i - 1] as DateTime?)?.ToString("yyyy/MM/dd hh:mm:ss", CultureInfo.InvariantCulture);
-                            else if (dataTable.Columns[i - 1].DataType == typeof(bool))
-                            {
-                                var boolValue = dr[i - 1] as bool?;
-                                if (!boolValue.HasValue)
-                                {
-                                    columnDeleted++;
-                                    ws.Cells[rowCount, columnCount].Value = "";
-                                }
-                                else
-                                    ws.Cells[rowCount, columnCount].Value = boolValue.Value ? _localResourceService.GetResource("System.Field.Yes") : _localResourceService.GetResource("System.Field.No");
-                            }
-                            else
-                            {
-                                if (dataTable.Columns[i - 1].ColumnName.Contains("Percentage") && double.TryParse(dr[i - 1].ToString(), out double percentageValue))
-                                {
-                                    ws.Cells[rowCount, columnCount].Value = percentageValue / 100; // Convert 10 to 0.10
-                                }
-                                else
-                                {
-                                    // Ensure only decimal values use a dot separator
-                                    if (dataTable.Columns[i - 1].DataType == typeof(Decimal) && !dataTable.Columns[i - 1].ColumnName.Contains("Percentage"))
-                                    {
-                                        ws.Cells[rowCount, columnCount].Value = Convert.ToDecimal(dr[i - 1]).ToString("F2", CultureInfo.InvariantCulture);
-                                    }
-                                    else
-                                    {
-                                        
-                                        ws.Cells[rowCount, columnCount].Value = dr[i - 1].ToString();
-                                        var lookup = GetLookupListFormDataTable(dataTable);
-                                    }
-                                }
-                            }
-                            ws.Cells[rowCount, columnCount].Style.HorizontalAlignment = alignment;
-                            columnCount++; // Increment the column index
-                        }
-                        else
-                        {
-                            columnToBeDeleted++;
-                        }
-                    }
-                }
-
-                
-
-                columnToBeDeleted = columnToBeDeleted / dataTable.Rows.Count;
-                Color myColor = Color.FromArgb(102, 68, 38, 207);
-                // Adjust the range to include only non-HTML columns
-                range = ws.Cells[1, 1, rowCount, dataTable.Columns.Count - columnDeleted - columnToBeDeleted];
-                range.AutoFitColumns();
-                range.Style.Border.Left.Style = OfficeOpenXml.Style.ExcelBorderStyle.Thin;
-                range.Style.Border.Top.Style = OfficeOpenXml.Style.ExcelBorderStyle.Thin;
-                range.Style.Border.Right.Style = OfficeOpenXml.Style.ExcelBorderStyle.Thin;
-                range.Style.Border.Bottom.Style = OfficeOpenXml.Style.ExcelBorderStyle.Thin;
-
-                range = ws.Cells[1, 1, 1, dataTable.Columns.Count - columnDeleted - columnToBeDeleted];
-                range.Style.Font.Bold = true;
-                range.Style.Font.Color.SetColor(System.Drawing.Color.White);
-                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
-                range.Style.Fill.BackgroundColor.SetColor(myColor);
-
-                var memoryStream = new MemoryStream();
-                pkg.SaveAs(memoryStream);
-                memoryStream.Position = 0;
-
-                return memoryStream;
-            }
-
-        }
-        
-        private bool ContainsHtmlTags(string input)
-        {
-            return System.Text.RegularExpressions.Regex.IsMatch(input, "<.*?>");
-        }
-        
         public byte[] ConvertSqlCommandToByte(SqlCommand cmd)
         {
             var keyValuePairs = new Dictionary<string, object?>();
@@ -740,44 +607,6 @@ namespace DomainServices.Services
             return System.Text.Encoding.UTF8.GetBytes(json);
         }
 
-        public SqlCommand ConvertByteToSqlCommand(byte[] bytes)
-        {
-            var cmd = new SqlCommand();
-
-            if (bytes == null || bytes.Length == 0)
-                return cmd;
-
-            string json = Encoding.UTF8.GetString(bytes);
-
-            var list = JsonConvert.DeserializeObject<List<SqlParamDto>>(json)
-                       ?? new List<SqlParamDto>();
-
-            foreach (var p in list)
-            {
-                var sqlType = SqlDbType.VarChar; // safe default
-
-                try
-                {
-                    sqlType = (SqlDbType)Enum.Parse(typeof(SqlDbType), p.Type, true);
-                }
-                catch { /* fallback */ }
-
-                var param = new SqlParameter(p.Name, sqlType)
-                {
-                    Value = p.Value ?? DBNull.Value
-                };
-
-                cmd.Parameters.Add(param);
-            }
-
-            return cmd;
-        }
-        private class SqlParamDto
-        {
-            public string Name { get; set; }
-            public object Value { get; set; }
-            public string Type { get; set; }
-        }
         public SqlCommand GetSqlCommanFromByte(byte[] cmdByte)
         {
             var cmd = new SqlCommand();
@@ -813,21 +642,6 @@ namespace DomainServices.Services
             };
         }
 
-        public byte[] DataTableToByteArray(DataTable table)
-        {
-            try { 
-                table.TableName = "TableName";
-                using var ms = new MemoryStream();
-                var serializer = new DataContractSerializer(typeof(DataTable));
-                serializer.WriteObject(ms, table);
-                return ms.ToArray();
-            }
-            catch(Exception e)
-            {
-                throw e;
-            }
-        }
-
         public DataTable ByteArrayToDataTable(byte[] bytes)
         {
             try
@@ -842,18 +656,35 @@ namespace DomainServices.Services
             }
         }
 
-        public List<Lookup> GetLookupListFormDataTable(DataTable dt)
+        public List<Lookup> GetLookupListFormDataTable(DataShape shape)
         {
-            var convertedList = (from rw in dt.AsEnumerable()
-                                 where dt.Columns.Contains("Code") && dt.Columns.Contains("Name") &&
-                                       rw["Code"] != DBNull.Value && rw["Name"] != DBNull.Value
-                                 select new Lookup()
-                                 {
-                                     Code = rw["Code"].ToString(),
-                                     Value = rw["Name"].ToString()
-                                 }).ToList();
+            var list = new List<Lookup>();
 
-            return convertedList;
+            if (shape == null || shape.Rows == null || shape.Rows.Count == 0)
+                return list;
+
+            foreach (var row in shape.Rows)
+            {
+                // must contain both Code and Name
+                if (!row.ContainsKey("Code") || !row.ContainsKey("Name"))
+                    continue;
+
+                var code = row["Code"];
+                var name = row["Name"];
+
+                // skip null / DBNull
+                if (code == null || code == DBNull.Value ||
+                    name == null || name == DBNull.Value)
+                    continue;
+
+                list.Add(new Lookup
+                {
+                    Code = code.ToString(),
+                    Value = name.ToString()
+                });
+            }
+
+            return list;
         }
 
         public void ThrowMessageAsException(string statusCode, string statusMessage) {

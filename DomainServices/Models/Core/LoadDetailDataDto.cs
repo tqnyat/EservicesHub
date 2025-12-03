@@ -3,7 +3,7 @@
     public class LoadDetailDataResponse
     {
         public List<LoadDetailItemDto> ListDetial { get; set; }
-        public string UpdatedSession { get; set; }
+        public Dictionary<string, object> UpdatedSession { get; set; }
     }
 
     public class LoadDetailItemDto
@@ -26,5 +26,10 @@
         public bool ReadOnly { get; set; }
         public Component Component { get; set; }
     }
-
+    public class LoadDetailDataRequest
+    {
+        public string ComponentName { get; set; }
+        public string? SelectedId { get; set; }
+        public string CoreDataView { get; set; }
+    }
 }

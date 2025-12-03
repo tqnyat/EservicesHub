@@ -9,15 +9,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
-using NLog.Config;
-using System.Collections;
-using System.Collections.Generic;
+using Quartz.Util;
 using System.Data;
 using System.Globalization;
 using System.Security.Claims;
 using System.Text;
-using System.Text.RegularExpressions;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
+using System.Text.Json;
 using Component = DomainServices.Models.Component;
 
 
@@ -147,12 +144,10 @@ namespace DomainServices.Services
             var username = currentUser.FindFirst("username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
-            var currentLang = Thread.CurrentThread.CurrentCulture.Name.ToLower();
-            var lang = currentLang.Contains("ar") ? "ar" : "en";
-
+            var lang = user.Language;
 
             // -------------------------------
-            // 2. SQL to get view + component metadata
+            // 2. SQL → Load View + Component Metadata
             // -------------------------------
             const string sql = @"
                 SELECT DISTINCT 
@@ -179,9 +174,8 @@ namespace DomainServices.Services
                 ORDER BY VC.Seq;
             ";
 
-
             // -------------------------------
-            // 3. Execute query (no DataTable)
+            // 3. Execute query
             // -------------------------------
             var list = new List<LoadViewListItemDto>();
             string viewDescription = "";
@@ -200,29 +194,28 @@ namespace DomainServices.Services
                 {
                     var dto = new LoadViewListItemDto
                     {
-                        Seq = reader.GetFieldValue<decimal>(reader.GetOrdinal("Seq")),
-                        ClientURL = reader.IsDBNull(reader.GetOrdinal("ClientURL")) ? "" : reader.GetString(reader.GetOrdinal("ClientURL")),
-                        ViewTitle = reader.IsDBNull(reader.GetOrdinal("ViewTitle")) ? "" : _localResourceService.GetResource(reader.GetString(reader.GetOrdinal("ViewTitle"))) ?? "",
-                        ViewId = reader.GetFieldValue<decimal>(reader.GetOrdinal("ViewId")),
-                        ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle")) ? 0 : reader.GetInt32(reader.GetOrdinal("ViewStyle")),
-                        ViewDataAccess = reader.GetInt32(reader.GetOrdinal("ViewDataAccess")),
-                        CompId = reader.GetFieldValue<decimal>(reader.GetOrdinal("CompId")),
-                        CompName = reader.IsDBNull(reader.GetOrdinal("CompName")) ? "" : reader.GetString(reader.GetOrdinal("CompName")),
-                        CompTitle = reader.IsDBNull(reader.GetOrdinal("CompTitle")) ? "" : _localResourceService.GetResource(reader.GetString(reader.GetOrdinal("CompTitle"))) ?? "",
-                        CompFieldId = reader.IsDBNull(reader.GetOrdinal("CompFieldId")) ? (decimal?)null : reader.GetDecimal(reader.GetOrdinal("CompFieldId")),
-                        ParCompId = reader.IsDBNull(reader.GetOrdinal("ParCompId")) ? (decimal?)null : reader.GetDecimal(reader.GetOrdinal("ParCompId")),
-                        ParCompFieldId = reader.IsDBNull(reader.GetOrdinal("ParCompFieldId")) ? (decimal?)null : reader.GetDecimal(reader.GetOrdinal("ParCompFieldId")),
-                        ReadOnly = reader.IsDBNull(reader.GetOrdinal("ReadOnly")) ? false : reader.GetBoolean(reader.GetOrdinal("ReadOnly")),
-                        ExportExcel = reader.IsDBNull(reader.GetOrdinal("ExportExcel")) ? false : reader.GetBoolean(reader.GetOrdinal("ExportExcel")),
-                        NoInsert = reader.IsDBNull(reader.GetOrdinal("NoInsert")) ? false : reader.GetBoolean(reader.GetOrdinal("NoInsert")),
-                        NoUpdate = reader.IsDBNull(reader.GetOrdinal("NoUpdate")) ? false : reader.GetBoolean(reader.GetOrdinal("NoUpdate")),
-                        NoDelete = reader.IsDBNull(reader.GetOrdinal("NoDelete")) ? false : reader.GetBoolean(reader.GetOrdinal("NoDelete")),
-                        CompFieldName = reader.IsDBNull(reader.GetOrdinal("CompFieldName")) ? "" : reader.GetString(reader.GetOrdinal("CompFieldName")),
-                        ParCompName = reader.IsDBNull(reader.GetOrdinal("ParCompName")) ? "" : reader.GetString(reader.GetOrdinal("ParCompName")),
-                        ParCompFieldName = reader.IsDBNull(reader.GetOrdinal("ParCompFieldName")) ? "" : reader.GetString(reader.GetOrdinal("ParCompFieldName")),
-                        HasDetail = reader.GetInt32(reader.GetOrdinal("HasDetail")),
-                        ViewDescription = reader.IsDBNull(reader.GetOrdinal("ViewDescription")) ? "" : reader.GetString(reader.GetOrdinal("ViewDescription")),
-
+                        Seq = reader.GetFieldValue<decimal>(0),
+                        ClientURL = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                        ViewTitle = reader.IsDBNull(2) ? "" : _localResourceService.GetResource(reader.GetString(2)) ?? "",
+                        ViewId = reader.GetFieldValue<decimal>(3),
+                        ViewStyle = reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                        ViewDataAccess = reader.GetInt32(5),
+                        CompId = reader.GetFieldValue<decimal>(6),
+                        CompName = reader.IsDBNull(7) ? "" : reader.GetString(7),
+                        CompTitle = reader.IsDBNull(8) ? "" : _localResourceService.GetResource(reader.GetString(8)) ?? "",
+                        CompFieldId = reader.IsDBNull(9) ? null : reader.GetDecimal(9),
+                        ParCompId = reader.IsDBNull(10) ? null : reader.GetDecimal(10),
+                        ParCompFieldId = reader.IsDBNull(11) ? null : reader.GetDecimal(11),
+                        ReadOnly = !reader.IsDBNull(12) && reader.GetBoolean(12),
+                        ExportExcel = !reader.IsDBNull(13) && reader.GetBoolean(13),
+                        NoInsert = !reader.IsDBNull(14) && reader.GetBoolean(14),
+                        NoUpdate = !reader.IsDBNull(15) && reader.GetBoolean(15),
+                        NoDelete = !reader.IsDBNull(16) && reader.GetBoolean(16),
+                        CompFieldName = reader.IsDBNull(17) ? "" : reader.GetString(17),
+                        ParCompName = reader.IsDBNull(18) ? "" : reader.GetString(18),
+                        ParCompFieldName = reader.IsDBNull(19) ? "" : reader.GetString(19),
+                        HasDetail = reader.GetInt32(20),
+                        ViewDescription = reader.IsDBNull(21) ? "" : reader.GetString(21)
                     };
 
                     viewDescription = dto.ViewDescription;
@@ -230,23 +223,23 @@ namespace DomainServices.Services
                 }
             }
 
-
             // -------------------------------
-            // 4. Load Component Definitions
+            // 4. Load component definitions
             // -------------------------------
             var componentNames = list.Select(x => x.CompName).Distinct().ToList();
             var componentMap = await LoadAllComponentDefinitions(componentNames);
 
             foreach (var item in list)
-                if (componentMap.TryGetValue(item.CompName, out var def))
-                    item.Component = def;
-
+            {
+                if (componentMap.TryGetValue(item.CompName, out var compDef))
+                    item.Component = compDef;
+            }
 
             // -------------------------------
-            // 5. BUILD NEW CoreDataView AS DataShape (REPLACES DataTable!)
+            // 5. Build CoreDataView using DataShape
             // -------------------------------
-            var shape = CoreDataShapeMapper.ToShape(list);
-            string coreDataViewJson = JsonConvert.SerializeObject(shape);
+            DataShape coreDataShape = CoreDataShapeMapper.ToShape(list);
+            string coreDataViewJson = JsonConvert.SerializeObject(coreDataShape);
 
 
             return new LoadViewResponse
@@ -263,7 +256,7 @@ namespace DomainServices.Services
         public async Task<ListDetialResponse> IGetTemplate(Dictionary<string, string> t, ClaimsPrincipal currentUser)
         {
             // ---------------------------------------
-            // 1. Authorization & Input Validation
+            // 1. Authorization & Validation
             // ---------------------------------------
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
@@ -272,9 +265,8 @@ namespace DomainServices.Services
                 string.IsNullOrWhiteSpace(componentName))
                 throw new Exception("componentName is required");
 
-
             // ---------------------------------------
-            // 2. Query
+            // 2. SQL
             // ---------------------------------------
             const string sql = @"
                 SELECT 
@@ -288,12 +280,10 @@ namespace DomainServices.Services
                 ORDER BY CF.DisplaySequence;
             ";
 
-
             // ---------------------------------------
-            // 3. Data Retrieval
+            // 3. Execute
             // ---------------------------------------
             var list = new List<ListDetialDto>();
-
             using var conn = new SqlConnection(_commonServices.getConnectionString());
             using var cmd = new SqlCommand(sql, conn);
 
@@ -313,9 +303,16 @@ namespace DomainServices.Services
                     Id = reader.GetInt32(reader.GetOrdinal("Id")),
                     Created = reader.GetDateTime(reader.GetOrdinal("Created")),
                     CreatedBy = reader["CreatedBy"]?.ToString(),
-                    LastUpd = reader["LastUpd"] == DBNull.Value ? null : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
+
+                    LastUpd = reader["LastUpd"] == DBNull.Value
+                        ? null
+                        : reader.GetDateTime(reader.GetOrdinal("LastUpd")),
+
                     LastUpdBy = reader["LastUpdBy"]?.ToString(),
-                    GroupId = reader["GroupId"] == DBNull.Value ? null : Convert.ToDecimal(reader["GroupId"]),
+
+                    GroupId = reader["GroupId"] == DBNull.Value
+                        ? null
+                        : Convert.ToDecimal(reader["GroupId"]),
 
                     Name = reader["Name"]?.ToString(),
                     TableName = reader["TableName"]?.ToString(),
@@ -336,19 +333,25 @@ namespace DomainServices.Services
                     IsCalc = reader.GetBoolean(reader.GetOrdinal("IsCalc")),
                     CalcExpr = reader["CalcExpr"]?.ToString(),
                     HtmlStyle = reader["HtmlStyle"]?.ToString(),
-                    LookUp = reader["LookUp"] == DBNull.Value ? null : Convert.ToDecimal(reader["LookUp"]),
+
+                    LookUp = reader["LookUp"] == DBNull.Value
+                        ? null
+                        : Convert.ToDecimal(reader["LookUp"]),
+
                     ImmediatePost = reader.GetBoolean(reader.GetOrdinal("ImmediatePost")),
                     DisplayInPopup = reader.GetBoolean(reader.GetOrdinal("DisplayInPopup")),
                     FileDataColumn = reader["FileDataColumn"]?.ToString(),
-                    FieldSize = reader["FieldSize"] == DBNull.Value ? null : Convert.ToInt32(reader["FieldSize"])
+
+                    FieldSize = reader["FieldSize"] == DBNull.Value
+                        ? null
+                        : Convert.ToInt32(reader["FieldSize"])
                 };
 
                 list.Add(dto);
             }
 
-
             // ---------------------------------------
-            // 4. Response (DTO)
+            // 4. Return DTO
             // ---------------------------------------
             return new ListDetialResponse
             {
@@ -356,341 +359,255 @@ namespace DomainServices.Services
             };
         }
 
-        //public async Task<object> ISubmitData(Dictionary<string, object> t, ClaimsPrincipal currentUser, ISession session)
-        //{
-        //    if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-        //    {
-        //        _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-        //    }
-
-        //    #region Declare Variables
-
-        //    // declare variables
-        //    var componentName = t["componentName"].ToString();
-        //    var submitedData = JsonConvert.DeserializeObject<Dictionary<string, object>>(t["dataList"].ToString());
-        //    var selectedId = t["selectedId"].ToString();
-        //    var saveType = t["saveType"].ToString();
-
-        //    var queryText = "";
-        //    var tableColumns = "";
-        //    var tableValues = "";
-        //    var parentField = "1";
-        //    var parentFieldValue = "1";
-        //    var connectionString = "";
-        //    var hasGroupId = false;
-        //    string rowId = "0";
-        //    object value = "";
-
-
-        //    // define objects
-        //    var user = _userManager.GetUserAsync(currentUser).Result;
-        //    var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-        //    var cmd = new SqlCommand();
-        //    var component = new Component();
-        //    var componentDetailList = new List<ComponentDetail>();
-        //    DataRow[] dataRow;
-        //    List<LoadViewListItemDto> da = null;
-        //    dataRow = coreDataView.Select("CompName = '" + componentName + "'");
-        //    parentField = dataRow[0]["CompFieldName"].ToString();
-        //    parentFieldValue = dataRow[0]["ParCompFieldValue"].ToString();
-        //    var sessionFields = session.GetString("Fields" + componentName + selectedId);
-        //    var fields = (sessionFields == null || t["selectedId"] == "-1") ?
-        //        _coreData.InitFields(da, componentName, selectedId, user) :
-        //        JsonConvert.DeserializeObject<List<Fields>>(sessionFields);
-        //    component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
-
-        //    #endregion
-
-        //    if (saveType == "new" && dataRow[0]["NoInsert"] != null && dataRow[0]["NoInsert"].ToString() == "1")
-        //    {
-        //        return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية الاضافة" } };
-        //    }
-
-        //    if (saveType == "edit" && dataRow[0]["NoUpdate"] != null && dataRow[0]["NoUpdate"].ToString() == "1")
-        //    {
-        //        return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية التعديل" } };
-        //    }
-
-        //    foreach (var row in fields)
-        //    {
-        //        if ((!Convert.ToBoolean(row.ReadOnly) && Convert.ToBoolean(row.Visible)
-        //            || (row.DefaultValue != null && row.DefaultValue.ToString() != "" && saveType == "new"))
-        //            && row.Type.ToString() != "Button" && !row.IsCalc)
-        //        {
-        //            submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var val);
-        //            row.Value = (val == null) ? row.Value : val;
-
-        //            if (row.Required && (row.Value == null || row.Value.ToString() == ""))
-        //            {
-        //                throw new Exception($"column {row.Name} is Required", new Exception(row.Name));
-        //            }
-
-        //            if ((row.Value == null || row.Value.ToString() == "")
-        //                && (row.DefaultValue != null && row.DefaultValue.ToString() != ""))
-        //            {
-        //                row.Value = _commonServices.GetFieldDefaultValue(fields, row.DefaultValue);
-        //            }
-        //            if (row.Value != null && CheckHtmlContent(row.Value.ToString()))
-        //            {
-        //                if (user?.RoleId != 1 && componentName != "SysView")
-        //                {
-        //                    throw new Exception("Contains Html Content");
-        //                }
-        //            }
-        //            if (row.Value != null && row.Value.ToString() != "")
-        //            {
-        //                if (row.Type.ToString().ToLower() == "date" || row.Type.ToString().ToLower() == "datetime" || row.Type.ToString().ToLower() == "time")
-        //                {
-        //                    string dateString, format = "";
-        //                    DateTime result;
-        //                    CultureInfo provider = CultureInfo.InvariantCulture;
-        //                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
-        //                    rowVal = rowVal == null ? row.Value : rowVal;
-        //                    dateString = rowVal.ToString();
-
-        //                    if (row.Type.ToString().ToLower() == "date")
-        //                    {
-        //                        format = "dd/MM/yyyy";
-        //                    }
-        //                    else if (row.Type.ToString().ToLower() == "datetime")
-        //                    {
-        //                        format = "yyyy-MM-ddTHH:mm";
-        //                    }
-        //                    else if (row.Type.ToString().ToLower() == "time")
-        //                    {
-        //                        format = "hh:mm tt";
-        //                    }
-
-        //                    result = DateTime.ParseExact(dateString, format, provider);
-
-        //                    row.Value = result;
-        //                }
-        //                else if (row.Type.ToString().ToLower() == "checkbox")
-        //                {
-        //                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
-        //                    row.Value = rowVal == null ? Convert.ToBoolean(row.Value) : Convert.ToBoolean(rowVal);
-        //                }
-        //                else if (row.Type.ToString().ToLower() == "file")// manage Files
-        //                {
-        //                    if (submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var fileValue))
-        //                    {
-        //                        row.Value = fileValue;
-        //                        row.FileDataValue = submitedData[row.Name + "_data"].ToString();
-        //                    }
-        //                }
-        //                else
-        //                {
-        //                    submitedData.TryGetValue(_commonServices.GetValue(row.Name), out var rowVal);
-        //                    row.Value = rowVal == null ? row.Value : rowVal;
-        //                }
-        //            }
-
-        //            if (saveType == "new")
-        //            {
-        //                if (row.ColumnName.ToLower() == "groupid")
-        //                {
-        //                    hasGroupId = true;
-        //                }
-
-        //                if (row.Type.ToString().ToLower() == "file") // manage Files
-        //                {
-        //                    if (!String.IsNullOrEmpty(row.FileDataColumn?.ToString()))
-        //                    {
-        //                        if (row.FileDataColumn == "clear-old-data")
-        //                        {
-        //                            tableColumns += "'',";
-        //                            tableValues += "@" + row.Name + ",";
-
-        //                            tableColumns += "'',";
-        //                            tableValues += "@" + row.FileDataColumn + ",";
-        //                        }
-        //                        else
-        //                        {
-        //                            tableColumns += row.ColumnName + ",";
-        //                            tableValues += "@" + row.Name + ",";
-
-        //                            tableColumns += row.FileDataColumn + ",";
-        //                            tableValues += "@" + row.FileDataColumn + ",";
-        //                        }
-        //                    }
-
-        //                }
-        //                else
-        //                {
-        //                    tableColumns += row.ColumnName + ",";
-        //                    tableValues += "@" + row.Name + ",";
-        //                }
-        //            }
-        //            else
-        //            {
-        //                if (row.Type.ToString().ToLower() == "file" && row.Value != null && row.Value.ToString() != "")
-        //                {
-        //                    if (!string.IsNullOrEmpty(row.FileDataValue) && row.FileDataValue != "clear-old-file")
-        //                    {
-        //                        tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
-        //                        tableColumns += row.FileDataColumn + "=" + "@" + row.FileDataColumn + ",";
-        //                        byte[] fileBytes = Convert.FromBase64String(row.FileDataValue.ToString());
-        //                        //cmd.Parameters.AddWithValue("@" + row.FileDataColumn, fileBytes);
-        //                    }
-        //                    else
-        //                    {
-        //                        tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
-        //                    }
-        //                }
-        //                else if (row.Type.ToString().ToLower() != "file")
-        //                {
-        //                    tableColumns += row.ColumnName + "=" + "@" + row.Name + ",";
-        //                }
-        //            }
-
-        //            cmd.Parameters.AddWithValue("@" + row.Name, (row.Value == null || row.Value.ToString() == "") ? DBNull.Value : row.Value);
-
-        //            if (row.Type.ToString().ToLower() == "file") // manage Files
-        //            {
-        //                byte[] fileBytes = (row.FileDataValue == "clear-old-file") ? new byte[0] : Convert.FromBase64String(row.FileDataValue.ToString());
-        //                cmd.Parameters.AddWithValue("@" + row.FileDataColumn, fileBytes);
-        //            }
-        //        }
-        //        if (row.Name.ToString() == parentField)
-        //            parentField = row.ColumnName.ToString();
-        //    }
-
-        //    string guid = Guid.NewGuid().ToString();
-        //    if (saveType == "new")
-        //    {
-        //        if (parentField != "1" && parentFieldValue != "" && parentFieldValue != null)
-        //        {
-        //            tableColumns += parentField + ",";
-        //            tableValues += "'" + parentFieldValue + "',";
-
-        //            if (parentField.ToLower() == "groupid")
-        //            {
-        //                hasGroupId = true;
-        //            }
-        //        }
-
-        //        tableColumns += component.TableName.ToLower() == "aspnetusers" ? "Id," : "";
-
-        //        tableColumns += "CreatedBy, LastUpdBy";
-        //        tableColumns += hasGroupId ? "" : ", GroupId";
-        //        tableColumns += component.TableName.ToLower() == "aspnetusers" ? ", UserGroupId, SecurityStamp" : "";
-
-        //        tableValues += component.TableName.ToLower() == "aspnetusers" ? $"'{guid}'," : "";
-        //        tableValues += "'" + user.Id + "', '" + user.Id + "'";
-        //        tableValues += hasGroupId ? "" : "," + user.UserGroupId;
-        //        tableValues += component.TableName.ToLower() == "aspnetusers" ? $", {user.UserGroupId} ,'{guid}'" : "";
-
-        //        queryText = "insert into " + component.TableName + "(" + tableColumns.TrimEnd(',') + ") Values (" + tableValues.TrimEnd(',') + ")";
-        //    }
-        //    else
-        //    {
-        //        tableColumns += "LastUpdBy = '" + user.Id + "', LastUpd = GetDate()";
-        //        queryText = "Update " + component.TableName + " Set " + tableColumns.TrimEnd(',') + " Where Id = @SelectedId";
-        //        cmd.Parameters.AddWithValue("@SelectedId", selectedId);
-        //    }
-        //    connectionString = _commonServices.getConnectionString();
-
-        //    SqlTransaction sqlTrans = null;
-        //    SqlConnection con = new SqlConnection(connectionString);
-        //    try
-        //    {
-        //        con.Open();
-        //        sqlTrans = con.BeginTransaction(IsolationLevel.ReadUncommitted);
-        //        rowId = _commonServices.ExecuteQuery_OneValue_Trans(queryText + "; SELECT scope_identity(); ", ref con, ref sqlTrans, cmd, CommandType.Text);
-        //        rowId = (rowId == "") ? selectedId : rowId;
-
-        //        if (saveType == "new")
-        //        {
-        //            rowId = component.TableName.ToLower() == "aspnetusers" ? guid : rowId;
-        //            if (component.OnCreateProc != null && component.OnCreateProc != "")
-        //            {
-        //                cmd.Parameters.Clear();
-        //                cmd.Parameters.AddWithValue("@RowId", rowId);
-        //                int x = _commonServices.excuteQuery_Trans(component.OnCreateProc, ref con, ref sqlTrans, cmd, CommandType.StoredProcedure);
-        //            }
-        //        }
-        //        else
-        //        {
-        //            if (component.OnUpdateProc != null && component.OnUpdateProc != "")
-        //            {
-        //                cmd.Parameters.Clear();
-        //                cmd.Parameters.AddWithValue("@RowId", rowId);
-        //                int x = _commonServices.excuteQuery_Trans(component.OnUpdateProc, ref con, ref sqlTrans, cmd, CommandType.StoredProcedure);
-
-        //            }
-        //        }
-
-        //        sqlTrans.Commit();
-        //        session.SetString("Fields" + componentName + rowId, JsonConvert.SerializeObject(fields));
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        sqlTrans.Rollback();
-        //        throw;
-        //    }
-        //    finally
-        //    {
-        //        if (con != null && con.State != ConnectionState.Closed)
-        //            con.Close();
-        //    }
-
-        //    if (componentName == "CompanyUsers")
-        //    {
-        //        return new Dictionary<string, object> { { "RowId", rowId }, { "saveType", saveType } };
-        //    }
-        //    return new Dictionary<string, object> { { "RowId", rowId } };
-        //}
-
-        public async Task<LoadDataResultDto> ILoadData(
-    LoadDataRequest t,
-    ClaimsPrincipal currentUser)
+        public async Task<SubmitDataResultDto> ISubmitData(SubmitDataRequest t, ClaimsPrincipal currentUser)
         {
-            // ------------------------------------------------
-            // 1. Validate Authentication
-            // ------------------------------------------------
+            // ----------------------------------------------------------
+            // 1) AUTH
+            // ----------------------------------------------------------
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            string componentName = t.ComponentName ?? "";
-            string activeRow = string.IsNullOrEmpty(t.SelectedId) ? "-1" : t.SelectedId;
-            int pageNumber = (t.PageNumber == -1) ? -1 : t.PageNumber;
-
-            var search = t.Search;
-            string connectionString = _commonServices.getConnectionString();
-
-            // load user
             var username = currentUser.FindFirst("username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
-            // ------------------------------------------------
-            // 2. Decode CoreDataView (RAW JSON → DataShape)
-            // ------------------------------------------------
-            var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "[]")
-                ?? new DataShape();
+            var componentName = t.ComponentName ?? "";
+            var saveType = t.SaveType?.ToLower() ?? "new"; // new | edit
+            var selectedId = string.IsNullOrWhiteSpace(t.SelectedId) ? "-1" : t.SelectedId;
+
+            var submittedData = t.DataList ?? new Dictionary<string, object>();
+            var connectionString = _commonServices.getConnectionString();
+            var cmd = new SqlCommand();
+
+            // ----------------------------------------------------------
+            // 2) LOAD VIEW / COMPONENT
+            // ----------------------------------------------------------
+            var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "[]") ?? new DataShape();
+            var views = CoreDataShapeMapper.FromShape(shape);
+
+            var view = views.FirstOrDefault(v => v.CompName == componentName)
+                ?? throw new Exception($"Component '{componentName}' not found in CoreDataView.");
+
+            var component = view.Component
+                ?? throw new Exception($"Component '{componentName}' has no Component definition.");
+
+            var parentField = view.CompFieldName ?? "1";
+            var parentFieldValue = view.ParCompFieldValue ?? "";
+
+            // ----------------------------------------------------------
+            // 3) PERMISSIONS
+            // ----------------------------------------------------------
+            if (saveType == "new" && view.NoInsert)
+                return _coreData.FailArabic("لا تملك صلاحية الاضافة", shape);
+
+            if (saveType == "edit" && view.NoUpdate)
+                return _coreData.FailArabic("لا تملك صلاحية التعديل", shape);
+
+            // ----------------------------------------------------------
+            // 4) LOAD FIELDS (from cache or fresh)
+            // ----------------------------------------------------------
+            List<Fields> fields;
+
+            if (string.IsNullOrEmpty(t.FieldsCache) || selectedId == "-1")
+            {
+                fields = await _coreData.InitFieldsStrong(component, selectedId, user);
+            }
+            else
+            {
+                // FIX: FieldsCache is a dictionary, not a list
+                var dict = JsonConvert.DeserializeObject<Dictionary<string, List<Fields>>>(t.FieldsCache)
+                           ?? new Dictionary<string, List<Fields>>();
+
+                // take the first list inside the dictionary
+                fields = dict.Values.FirstOrDefault() ?? new List<Fields>();
+            }
+
+
+            // ----------------------------------------------------------
+            // 5) PROCESS FIELDS (validation + SQL building)
+            // ----------------------------------------------------------
+            var insertCols = new StringBuilder();
+            var insertVals = new StringBuilder();
+            var updateSet = new StringBuilder();
+            bool hasGroupId = false;
+
+            foreach (var row in fields)
+            {
+                bool shouldProcess =
+                    ((!row.ReadOnly && row.Visible)
+                    || (!string.IsNullOrWhiteSpace(row.DefaultValue.ToString()) && saveType == "new"))
+                    && row.Type?.ToLower() != "button"
+                    && !row.IsCalc;
+
+                if (!shouldProcess)
+                    continue;
+
+                // -----------------------------
+                // Pull and normalize submitted value
+                // -----------------------------
+                submittedData.TryGetValue(_commonServices.GetValue(row.Name), out var raw);
+                raw = _coreData.NormalizeValue(raw);
+
+                if (raw != null)
+                    row.Value = raw;
+
+                // -----------------------------
+                // Required validation
+                // -----------------------------
+                if (row.Required &&
+                    (row.Value == null || string.IsNullOrWhiteSpace(row.Value.ToString())))
+                    throw new Exception($"column {row.Name} is Required", new Exception(row.Name));
+
+                // -----------------------------
+                // Apply default value if needed
+                // -----------------------------
+                if ((row.Value == null || string.IsNullOrWhiteSpace(row.Value.ToString()))
+                    && !string.IsNullOrWhiteSpace(row.DefaultValue.ToString()))
+                {
+                    row.Value = _commonServices.GetFieldDefaultValue(fields, row.DefaultValue);
+                }
+
+                // -----------------------------
+                // HTML content validation
+                // -----------------------------
+                if (row.Value != null && CheckHtmlContent(row.Value.ToString()))
+                {
+                    if (user.RoleId != 1 && componentName != "SysView")
+                        throw new Exception("Contains Html Content");
+                }
+
+                // -----------------------------
+                // Type-specific conversions
+                // -----------------------------
+                row.Value = _coreData.ConvertFieldValue(row.Type, row.Value);
+
+                // ----------------------------------------------------
+                // SQL BUILDING – INSERT
+                // ----------------------------------------------------
+                if (saveType == "new")
+                {
+                    if (row.ColumnName?.Equals("groupid", StringComparison.OrdinalIgnoreCase) == true)
+                        hasGroupId = true;
+
+                    if (row.Type?.ToLower() != "file")
+                    {
+                        insertCols.Append(row.ColumnName + ",");
+                        insertVals.Append("@" + row.Name + ",");
+                    }
+                    else
+                    {
+                        _coreData.HandleFileInsert(row, insertCols, insertVals);
+                    }
+                }
+                else // ----------------------------------------------------
+                     // SQL BUILDING – UPDATE
+                     // ----------------------------------------------------
+                {
+                    _coreData.HandleFileUpdate(row, updateSet);
+                }
+
+                // ----------------------------------------------------
+                // ADD SQL PARAMETER
+                // ----------------------------------------------------
+                _coreData.AddSqlParameter(cmd, row);
+            }
+
+            // ----------------------------------------------------------
+            // 6) PARENT FIELD → MAP NAME TO COLUMN
+            // ----------------------------------------------------------
+            foreach (var r in fields)
+            {
+                if (r.Name.Equals(parentField, StringComparison.OrdinalIgnoreCase))
+                    parentField = r.ColumnName ?? parentField;
+            }
+
+            // ----------------------------------------------------------
+            // 7) COMPLETE SQL INSERT/UPDATE
+            // ----------------------------------------------------------
+            string rowId;
+            var sql = _coreData.BuildFinalSql(saveType, component.TableName, cmd, insertCols, insertVals, updateSet, parentField, parentFieldValue, hasGroupId, user, selectedId, out rowId);
+
+            // ----------------------------------------------------------
+            // 8) EXECUTE SQL
+            // ----------------------------------------------------------
+            _coreData.ExecuteSubmitSql(sql, cmd, component, user, saveType, ref rowId);
+
+            // ----------------------------------------------------------
+            // 9) UPDATE FIELDS CACHE (equivalent to old session.SetString)
+            // ----------------------------------------------------------
+            string cacheKey = $"{componentName}-{rowId}";
+
+            // Build a fresh dictionary (same as EditRowData)
+            var fieldsCache = new Dictionary<string, List<Fields>>
+            {
+                { cacheKey, fields }
+            };
+
+            var updatedSession = new Dictionary<string, object>
+            {
+                { "FieldsCache", JsonConvert.SerializeObject(fieldsCache) }
+            };
+
+            // ----------------------------------------------------------
+            // 10) RETURN
+            // ----------------------------------------------------------
+            return new SubmitDataResultDto
+            {
+                RowId = rowId,
+                SaveType = saveType,
+                UpdatedSession = updatedSession
+            };
+        }
+
+
+        public async Task<LoadDataResultDto> ILoadData(LoadDataRequest t, ClaimsPrincipal currentUser)
+        {
+            // ------------------------------------------------------------
+            // 1. Authentication Validation
+            // ------------------------------------------------------------
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
+
+            // Extract request parameters
+            var componentName = t.ComponentName ?? string.Empty;
+            var activeRow = string.IsNullOrEmpty(t.SelectedId) ? "-1" : t.SelectedId;
+            var pageNumber = t.PageNumber == -1 ? -1 : t.PageNumber;
+            var search = t.Search;
+
+            var connectionString = _commonServices.getConnectionString();
+
+            // ------------------------------------------------------------
+            // 2. Resolve Current User
+            // ------------------------------------------------------------
+            var username = currentUser.FindFirst("username")?.Value;
+            var user = await _userManager.FindByNameAsync(username);
+
+            // ------------------------------------------------------------
+            // 3. Decode CoreDataView (DataShape → DTO List)
+            // ------------------------------------------------------------
+            var shapeJson = t.CoreDataView ?? "[]";
+            var shape = JsonConvert.DeserializeObject<DataShape>(shapeJson) ?? new DataShape();
 
             var coreViewList = CoreDataShapeMapper.FromShape(shape);
-
-            // NOTE: There may be multiple views in DataShape (multi-grid)
             var view = coreViewList.FirstOrDefault(v => v.CompName == componentName);
-            if (view == null)
-                throw new Exception($"View for component '{componentName}' not found in CoreDataView.");
 
-            var component = view.Component;
-            string parentField = view.CompFieldName ?? "";
-            string parentFieldValue = view.ParCompFieldValue ?? "";
-            int viewDataAccess = view.ViewDataAccess;
+            if (view == null) throw new Exception($"View for component '{componentName}' not found in CoreDataView.");
 
-            // ------------------------------------------------
-            // 3. Calculate PageNumber for selected row
-            // ------------------------------------------------
-            SqlCommand cmd = new SqlCommand();
+            var component = view.Component ?? throw new Exception($"Component for '{componentName}' is not initialized in CoreDataView.");
+
+            var parentField = view.CompFieldName ?? string.Empty;
+            var parentFieldValue = view.ParCompFieldValue ?? string.Empty;
+
+            // ------------------------------------------------------------
+            // 4. Page Number Resolution (matches legacy behavior)
+            // ------------------------------------------------------------
+            var cmd = new SqlCommand();
 
             if (pageNumber == -1)
             {
-                string pageNumberQuery =
+                var pageNumberQuery =
                     "SELECT PageNumber FROM (" +
-                    $"    SELECT ((ROW_NUMBER() OVER (ORDER BY {component.SortSpec})) / {component.PageSize}) + 1 AS PageNumber, Id " +
-                    $"    FROM {component.TableName} " +
+                    $"  SELECT ((ROW_NUMBER() OVER (ORDER BY {component.SortSpec})) / {component.PageSize}) + 1 AS PageNumber, Id " +
+                    $"  FROM {component.TableName} " +
                     (string.IsNullOrEmpty(parentField) ? "" : $" WHERE {parentField} = @ParentFieldValue") +
                     ") A WHERE Id = @RowId";
 
@@ -698,92 +615,98 @@ namespace DomainServices.Services
                 cmd.Parameters.AddWithValue("@RowId", activeRow);
                 cmd.Parameters.AddWithValue("@ParentFieldValue", parentFieldValue);
 
-                pageNumber = Convert.ToInt32(
-                    _commonServices.ExecuteQuery_OneValue(pageNumberQuery, cmd, connectionString)
-                );
-
+                var result = _commonServices.ExecuteQuery_OneValue(pageNumberQuery, cmd, connectionString);
+                pageNumber = string.IsNullOrEmpty(result) ? 1 : Convert.ToInt32(result);
                 pageNumber = pageNumber < 1 ? 1 : pageNumber;
             }
 
-            // ------------------------------------------------
-            // 4. REBUILD QUERY if:
-            //    ❌ no cached query
-            //    ❌ search is applied
-            //    ❌ new row (-1)
-            // ------------------------------------------------
-            string queryText = view.QueryString;
-            string queryCount = view.QueryStringCount;
+            // ------------------------------------------------------------
+            // 5. Resolve or Rebuild Query Definitions
+            // ------------------------------------------------------------
+            var queryText = view.QueryString;
+            var queryCount = view.QueryStringCount;
 
-            bool rebuild =
-                string.IsNullOrEmpty(queryText) || (search != null && search.Any()) || activeRow == "-1";
+            var hasSearch = search != null && search.Count > 0;
+            var rebuildQuery = string.IsNullOrEmpty(queryText) || hasSearch || activeRow == "-1";
 
-            if (rebuild)
+            if (rebuildQuery)
             {
+                // Build complete SELECT + COUNT queries based on ComponentField metadata
                 _coreData.BuildLoadDataQuery(component: component, view: view, search: search, user: user, cmd: cmd, query: out queryText, queryCount: out queryCount);
+
+                // Cache the base command snapshot before paging parameters are added
+                var cmdBytes = _commonServices.ConvertSqlCommandToByte(cmd);
+                view.QueryString = queryText;
+                view.QueryStringCount = queryCount;
+                view.QueryStringCmd = Convert.ToBase64String(cmdBytes);
             }
             else
             {
-                // restore cmd from Base64 if cached
+                // Restore cached SqlCommand (metadata parameters only)
                 if (!string.IsNullOrWhiteSpace(view.QueryStringCmd))
                 {
-                    try
-                    {
-                        cmd = _commonServices.GetSqlCommanFromByte(
-                            Convert.FromBase64String(view.QueryStringCmd)
-                        ) ?? new SqlCommand();
-                    }
-                    catch
-                    {
-                        cmd = new SqlCommand();
-                    }
+                    try { cmd = _commonServices.GetSqlCommanFromByte(Convert.FromBase64String(view.QueryStringCmd)) ?? new SqlCommand(); }
+                    catch { cmd = new SqlCommand(); }
                 }
+
+                queryText = view.QueryString;
+                queryCount = view.QueryStringCount;
             }
 
-            // ------------------------------------------------
-            // 5. Add paging parameters
-            // ------------------------------------------------
-            cmd.Parameters.AddWithValue("@PageSize", component.PageSize);
-            cmd.Parameters.AddWithValue("@PageNumber", pageNumber);
+            // ------------------------------------------------------------
+            // 6. Apply Paging Parameters (added per request, never cached)
+            // ------------------------------------------------------------
+            if (!cmd.Parameters.Contains("@PageSize"))
+                cmd.Parameters.AddWithValue("@PageSize", component.PageSize);
+            else
+                cmd.Parameters["@PageSize"].Value = component.PageSize;
 
-            // ------------------------------------------------
-            // 6. Execute the Query
-            // ------------------------------------------------
-            var listDetial = _commonServices.ExecuteListDictionary(
-                queryText,
-                cmd,
-                connectionString
-            );
+            if (!cmd.Parameters.Contains("@PageNumber"))
+                cmd.Parameters.AddWithValue("@PageNumber", pageNumber);
+            else
+                cmd.Parameters["@PageNumber"].Value = pageNumber;
 
-            int recordCount = Convert.ToInt32(
-                _commonServices.ExecuteQuery_OneValue(queryCount, cmd, connectionString)
-            );
+            // Parent filter parameter (used only when parentField is part of WHERE)
+            if (!string.IsNullOrEmpty(parentField))
+            {
+                if (!cmd.Parameters.Contains("@ParentFieldValue"))
+                    cmd.Parameters.AddWithValue("@ParentFieldValue", parentFieldValue);
+                else
+                    cmd.Parameters["@ParentFieldValue"].Value = parentFieldValue;
+            }
 
-            bool isAppletDisabled =
-                string.IsNullOrEmpty(parentFieldValue) ||
-                parentFieldValue == "0";
+            // Language parameter (required for lookup evaluations)
+            cmd.Parameters.AddWithValue("@LangId", user.Language);
 
-            // ------------------------------------------------
-            // 7. Update DataShape (store query cache)
-            // ------------------------------------------------
-            view.QueryString = queryText;
-            view.QueryStringCount = queryCount;
-            view.QueryStringCmd = Convert.ToBase64String(
-                _commonServices.ConvertSqlCommandToByte(cmd)
-            );
+            // ------------------------------------------------------------
+            // 7. Execute Main Query + Count Query
+            // ------------------------------------------------------------
+            var listDetial = _commonServices.ExecuteListDictionary(queryText, cmd, connectionString);
 
+            var recordCountStr = _commonServices.ExecuteQuery_OneValue(queryCount, cmd, connectionString);
+
+            var recordCount = string.IsNullOrEmpty(recordCountStr) ? 0 : Convert.ToInt32(recordCountStr);
+
+            // ------------------------------------------------------------
+            // 8. Applet State Resolution (matches legacy logic)
+            // ------------------------------------------------------------
+            var appletDisable = !string.IsNullOrEmpty(parentField) && (string.IsNullOrEmpty(parentFieldValue) || parentFieldValue == "0") ? "disable" : "enable";
+
+            // ------------------------------------------------------------
+            // 9. Update CoreDataView (DataShape)
+            // ------------------------------------------------------------
             var updatedShape = CoreDataShapeMapper.ToShape(coreViewList);
-            string updatedCoreJson = JsonConvert.SerializeObject(updatedShape);
+            var updatedCoreJson = JsonConvert.SerializeObject(updatedShape);
 
-            // ------------------------------------------------
-            // 8. Final Response
-            // ------------------------------------------------
+            // ------------------------------------------------------------
+            // 10. Build Final Response
+            // ------------------------------------------------------------
             return new LoadDataResultDto
             {
                 ListDetial = listDetial,
                 RecordCount = recordCount,
                 PageSize = component.PageSize,
-                AppletDisable = isAppletDisabled ? "disable" : "enable",
-
+                AppletDisable = appletDisable,
                 UpdatedSession = new Dictionary<string, object>
                 {
                     { "CoreDataView", updatedCoreJson }
@@ -791,28 +714,33 @@ namespace DomainServices.Services
             };
         }
 
-
-
-        public async Task<LoadDetailDataResponse> ILoadDetailData(Dictionary<string, string> t, ClaimsPrincipal currentUser)
+        public async Task<LoadDetailDataResponse> ILoadDetailData(LoadDetailDataRequest t, ClaimsPrincipal currentUser)
         {
+            // ---------------------------------------------------------
+            // 1. Authentication
+            // ---------------------------------------------------------
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not authorized or session timeout", "401");
 
-            if (!t.TryGetValue("componentName", out var componentName) || string.IsNullOrEmpty(componentName))
-                throw new Exception("componentName is required");
-
-            if (!t.TryGetValue("selectedId", out var activeRow))
-                activeRow = "-1";
+            string componentName = t.ComponentName ?? "";
+            string activeRow = string.IsNullOrEmpty(t.SelectedId) ? "-1" : t.SelectedId;
 
             // ---------------------------------------------------------
-            // 1. Decode CoreDataView (RAW JSON)
+            // 2. Decode CoreDataView (DataShape)
             // ---------------------------------------------------------
-            var coreViewJson = t["CoreDataView"];
-            var coreViewList = JsonConvert.DeserializeObject<List<LoadViewListItemDto>>(coreViewJson)
-                               ?? new List<LoadViewListItemDto>();
+            var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "[]")
+                ?? new DataShape();
+
+            var coreViewList = CoreDataShapeMapper.FromShape(shape);
+
+            // Parent view (main grid)
+            var parentView = coreViewList.FirstOrDefault(x => x.CompName == componentName);
+
+            if (parentView == null)
+                throw new Exception($"View for component '{componentName}' not found in CoreDataView.");
 
             // ---------------------------------------------------------
-            // 2. Find detail components where ParCompName = parent component
+            // 3. Identify all detail components
             // ---------------------------------------------------------
             var detailItems = coreViewList
                 .Where(x => x.ParCompName == componentName)
@@ -823,81 +751,91 @@ namespace DomainServices.Services
                 return new LoadDetailDataResponse
                 {
                     ListDetial = new List<LoadDetailItemDto>(),
-                    UpdatedSession = coreViewJson
+                    UpdatedSession = new Dictionary<string, object>
+                    {
+                        { "CoreDataView", t.CoreDataView }
+                    }
                 };
             }
 
             string connectionString = _commonServices.getConnectionString();
 
+            // ---------------------------------------------------------
+            // 4. Resolve parent field value for each detail item
+            // ---------------------------------------------------------
             foreach (var item in detailItems)
             {
                 var component = item.Component;
                 string parField = item.ParCompFieldName;
 
-                // ---------------------------------------------------------
-                // 3. Resolve parent field value
-                // ---------------------------------------------------------
-                string parentValue = "";
+                string parentValue = activeRow; // default behavior
 
                 if (!string.IsNullOrEmpty(parField) &&
                     parField.ToLower() != "id" &&
                     parField.ToLower() != "rowid")
                 {
-                    // If the ID is numeric, use directly. Otherwise wrap in quotes.
-                    var idValue = int.TryParse(activeRow, out _) ? activeRow : $"'{activeRow}'";
-
-                    var parentColumnQuery =
+                    // --- Step 1: find actual DB column (ColumnName or CalcExpr) ---
+                    string resolveColumnSql =
                         $"SELECT CASE WHEN IsCalc = 0 THEN ColumnName ELSE CalcExpr END " +
                         $"FROM ComponentField " +
-                        $"WHERE ComponentId = (SELECT MAX(Id) FROM Component WHERE Name = '{componentName}') " +
-                        $"AND Name = '{parField}'";
+                        $"WHERE ComponentId = (SELECT MAX(Id) FROM Component WHERE Name = @CompName) " +
+                        $"AND Name = @FieldName";
 
-                    var parentColumn = _commonServices.ExecuteQuery_OneValue(parentColumnQuery, null, connectionString);
+                    var cmd = new SqlCommand();
+                    cmd.Parameters.AddWithValue("@CompName", componentName);
+                    cmd.Parameters.AddWithValue("@FieldName", parField);
 
-                    string valueQuery = $"SELECT {parentColumn} FROM {component.TableName} WHERE Id = {idValue}";
-                    parentValue = _commonServices.ExecuteQuery_OneValue(valueQuery, null, connectionString);
+                    var dbColumn = _commonServices.ExecuteQuery_OneValue(resolveColumnSql, cmd, connectionString);
+
+                    // --- Step 2: extract parent value from parent component table ---
+                    if (!string.IsNullOrWhiteSpace(dbColumn))
+                    {
+                        bool numeric = int.TryParse(activeRow, out _);
+                        string idValue = numeric ? activeRow : $"'{activeRow}'";
+
+                        string valueQuery = $"SELECT {dbColumn} FROM {item.ParCompName} WHERE Id = {idValue}";
+                        parentValue = _commonServices.ExecuteQuery_OneValue(valueQuery, null, connectionString);
+                    }
                 }
-                else
-                {
-                    parentValue = activeRow; // default behaviour
-                }
 
-                item.ParCompFieldValue = parentValue;
+                item.ParCompFieldValue = parentValue; // save value in DataShape
             }
 
             // ---------------------------------------------------------
-            // 4. Return only detail metadata (strongly typed)
+            // 5. Produce response DTO
             // ---------------------------------------------------------
-            var resultList = detailItems
-                .Select(x => new LoadDetailItemDto
-                {
-                    Seq = x.Seq,
-                    ClientURL = x.ClientURL,
-                    ViewTitle = x.ViewTitle,
-                    ViewId = x.ViewId,
-                    CompId = x.CompId,
-                    CompName = x.CompName,
-                    CompTitle = x.CompTitle,
-                    CompFieldId = x.CompFieldId,
-                    ParCompId = x.ParCompId,
-                    ParCompName = x.ParCompName,
-                    ParCompFieldId = x.ParCompFieldId,
-                    ParCompFieldName = x.ParCompFieldName,
-                    ParCompFieldValue = x.ParCompFieldValue,
-                    ReadOnly = x.ReadOnly,
-                    Component = x.Component // if needed by UI
-                })
-                .ToList();
+            var resultList = detailItems.Select(x => new LoadDetailItemDto
+            {
+                Seq = x.Seq,
+                ClientURL = x.ClientURL,
+                ViewTitle = x.ViewTitle,
+                ViewId = x.ViewId,
+                CompId = x.CompId,
+                CompName = x.CompName,
+                CompTitle = x.CompTitle,
+                CompFieldId = x.CompFieldId,
+                ParCompId = x.ParCompId,
+                ParCompName = x.ParCompName,
+                ParCompFieldId = x.ParCompFieldId,
+                ParCompFieldName = x.ParCompFieldName,
+                ParCompFieldValue = x.ParCompFieldValue,
+                ReadOnly = x.ReadOnly,
+                Component = x.Component
+            }).ToList();
 
             // ---------------------------------------------------------
-            // 5. Save updated CoreDataView (RAW JSON)
+            // 6. Update DataShape
             // ---------------------------------------------------------
-            string updatedJson = JsonConvert.SerializeObject(coreViewList);
+            var updatedShape = CoreDataShapeMapper.ToShape(coreViewList);
+            string updatedJson = JsonConvert.SerializeObject(updatedShape);
 
             return new LoadDetailDataResponse
             {
-                ListDetial = resultList,     
-                UpdatedSession = updatedJson   
+                ListDetial = resultList,
+                UpdatedSession = new Dictionary<string, object>
+                {
+                    { "CoreDataView", updatedJson }
+                }
             };
         }
 
@@ -910,7 +848,7 @@ namespace DomainServices.Services
             string selectedId = string.IsNullOrWhiteSpace(t.SelectedId) ? "-1" : t.SelectedId;
 
             // ---------------------------------------------------------
-            // 1. Convert CoreDataView JSON → DataShape → List<Dto>
+            // 1. Decode CoreDataView
             // ---------------------------------------------------------
             var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "{}")
                         ?? new DataShape();
@@ -918,67 +856,56 @@ namespace DomainServices.Services
             var coreViewList = CoreDataShapeMapper.FromShape(shape);
 
             // ---------------------------------------------------------
-            // 2. Load FieldsCache JSON
+            // 2. Load FieldsCache (Session)
             // ---------------------------------------------------------
             Dictionary<string, List<Fields>> fieldsCache =
                 string.IsNullOrWhiteSpace(t.FieldsCache)
-                ? new Dictionary<string, List<Fields>>()
-                : JsonConvert.DeserializeObject<Dictionary<string, List<Fields>>>(t.FieldsCache)
-                    ?? new Dictionary<string, List<Fields>>();
+                    ? new Dictionary<string, List<Fields>>()
+                    : JsonConvert.DeserializeObject<Dictionary<string, List<Fields>>>(t.FieldsCache)
+                      ?? new Dictionary<string, List<Fields>>();
 
-            string cacheKey = componentName + selectedId;
+            string cacheKey = componentName;
 
+            // ---------------------------------------------------------
+            // 3. Get user + component
+            // ---------------------------------------------------------
             var username = currentUser.FindFirst("username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
-            // ---------------------------------------------------------
-            // 3. Get component definition from the view list
-            // ---------------------------------------------------------
             var viewItem = coreViewList.FirstOrDefault(x => x.CompName == componentName);
             if (viewItem == null)
                 throw new Exception($"Component {componentName} not found.");
 
             var component = viewItem.Component;
 
-            // ---------------------------------------------------------
-            // 4. If fields exist in cache → return cached version
-            // ---------------------------------------------------------
-            if (fieldsCache.TryGetValue(cacheKey, out var cachedFields))
-            {
-                // REBUILD datashape again (important!)
-                var updatedShape = CoreDataShapeMapper.ToShape(coreViewList);
-                string updatedJson = JsonConvert.SerializeObject(updatedShape);
+            List<Fields> fields;
 
-                return new EditRowResultDto
-                {
-                    ListDetial = cachedFields,
-                    UpdatedSession = new Dictionary<string, object>
-                    {
-                        { "CoreDataView", updatedJson },
-                        { "FieldsCache", JsonConvert.SerializeObject(fieldsCache) }
-                    }
-                };
+            // ---------------------------------------------------------
+            // 4. EXACT LEGACY LOGIC:
+            //    If cache exists → use it
+            //    If not → build fresh
+            // ---------------------------------------------------------
+            if (!fieldsCache.ContainsKey(cacheKey) || selectedId != "-1")
+            {
+                // Build fresh fields
+                fields = await _coreData.InitFieldsStrong(component, selectedId, user);
+                fieldsCache[cacheKey] = fields;
+                
+            }
+            else
+            {
+                // Reuse — identical to old session behavior
+                fields = fieldsCache[cacheKey];
             }
 
             // ---------------------------------------------------------
-            // 5. Build fields fresh (strong version)
+            // 5. Return with updated session
             // ---------------------------------------------------------
-            var fields = await _coreData.InitFieldsStrong(component, selectedId, user);
-
-            fieldsCache[cacheKey] = fields;
-
-            // ---------------------------------------------------------
-            // 6. Rebuild DataShape → JSON
-            // ---------------------------------------------------------
-            var newShape = CoreDataShapeMapper.ToShape(coreViewList);
-            string newJson = JsonConvert.SerializeObject(newShape);
-
             return new EditRowResultDto
             {
                 ListDetial = fields,
                 UpdatedSession = new Dictionary<string, object>
                 {
-                    { "CoreDataView", newJson },
                     { "FieldsCache", JsonConvert.SerializeObject(fieldsCache) }
                 }
             };
@@ -1469,172 +1396,6 @@ namespace DomainServices.Services
             string decodedSanitized = System.Web.HttpUtility.HtmlDecode(sanitized);
 
             return decodedSanitized != decodedOriginal;
-        }
-
-        #endregion
-        #region Session Services
-
-        // Create Session used in login
-        public async Task<string> CreateSession(Users user, ISession session = null, string sessionKey = null, int source = 1)
-        {
-            string sessionId = (source == 1 && session != null) ? session.Id : Guid.NewGuid().ToString();
-            var oldSession = _domainRepo.GetSignedInUsers(user.Id);
-            foreach (var item in oldSession)
-            {
-                item.Active = false;
-                _domainRepo.UpdateSignInUser(item);
-            }
-            if (!await _commonServices.UserSession(user, sessionId, source, sessionKey.ToString()))
-            {
-                return "false";
-            }
-            return "true";
-        }
-
-        public async Task<string> CheckSession(Users user, string? sessionKey = null)
-        {
-            if (user == null)
-            {
-                return "false";
-            }
-            var signedInUsers = (sessionKey != null) ? _domainRepo.GetSignedInUsers(user.Id, sessionKey)
-                : _domainRepo.GetSignedInUsers(user.Id);
-
-            if (signedInUsers.Any())
-            {
-                var activeSession = signedInUsers.FirstOrDefault();
-                int expiredSessionDateInDays = Convert.ToInt32(IGetSettingValue("expiredSessionDateinDays"));
-                int expiredSessionDateInMinutes = Convert.ToInt32(IGetSettingValue("expiredSessionDateinMinutes"));
-
-                // Check if session is within the allowed days and also updated within the last 30 minutes
-                if (activeSession.LastUpd > DateTime.Now.AddDays(-expiredSessionDateInDays) &&
-                    activeSession.LastUpd >= DateTime.Now.AddMinutes(-expiredSessionDateInMinutes))
-                {
-
-                    // Refresh session timestamp
-                    activeSession.LastUpd = DateTime.Now;
-                    _domainRepo.UpdateSignInUser(activeSession);
-                    return "true"; // Session is valid
-                }
-                else
-                {
-
-                    // Expired session, mark it as inactive
-                    activeSession.Active = false;
-                    _domainRepo.UpdateSignInUser(activeSession);
-                    return "false";
-                }
-            }
-            return "false"; // No active session found
-        }
-
-        public async Task<string> CloseSession(Users user)
-        {
-            var signedInUser = _domainRepo
-                .GetSignedInUsers(user.Id)?
-                .Where(s => s.Active)
-                .OrderByDescending(s => s.Created)
-                .Skip(1);
-
-            if (signedInUser != null && signedInUser.Any())
-            {
-                foreach (var item in signedInUser)
-                {
-                    item.Active = false;
-                    item.EndSession = DateTime.Now;
-                    _domainRepo.UpdateSignInUser(item);
-                }
-                return "true";
-            }
-            return "false";
-        }
-
-        // Check If Session Valid used in all Core services 
-        public async Task<bool> IsValidSession(ClaimsPrincipal currentUser, ISession session, string sessionKey, bool update = false, string userName = null)
-        {
-            try
-            {
-                // Get user
-                var user = _userManager.GetUserAsync(currentUser).Result;
-                if (user == null)
-                {
-                    if (session == null)
-                    {
-                        user = _userManager.FindByNameAsync(userName).Result;
-                    }
-                }
-                SignedInUsers? signedInUser;
-                signedInUser = _domainRepo?
-                .GetSignedInUsers(user.Id)?
-                .Where(u => u.SessionKey == sessionKey && u.Active && u.Source != (int)PublicEnums.SingleSessionType.Vendors)
-                .OrderByDescending(u => u.Created)
-                .FirstOrDefault();
-                if (sessionKey == null)
-                {
-                    signedInUser = _domainRepo?
-                        .GetSignedInUsers(user.Id)?
-                        .Where(u => u.SessionId == session.Id && u.Active && u.Source != (int)PublicEnums.SingleSessionType.Vendors)
-                        .OrderByDescending(u => u.Created)
-                        .FirstOrDefault();
-                }
-                if (signedInUser != null)
-                {
-                    // Get session ping time from settings
-                    int sessionPingTime = Convert.ToInt32(IGetSettingValue("SessionPingTime"));
-                    DateTime sessionTimeThreshold = DateTime.Now.AddMinutes(-sessionPingTime);
-
-                    if (signedInUser.LastUpd >= sessionTimeThreshold)
-                    {
-                        // Update session time
-                        if (update)
-                        {
-                            signedInUser.LastUpd = DateTime.Now;
-                            _domainRepo?.UpdatePingSessionTimeAsync(signedInUser);
-                        }
-                        return true;
-                    }
-                    signedInUser.Active = false;
-                    _domainRepo?.UpdatePingSessionTimeAsync(signedInUser);
-                }
-                // If session is invalid, sign out
-                if (session != null) session.Clear();
-                await _signInManager.SignOutAsync();
-                return false;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-
-        }
-        public Dictionary<string, string> GetUserSessionKeys(Users? user)
-        {
-            var result = new Dictionary<string, string>();
-
-            var signedInUser = _domainRepo.GetSignedInUsers(user.Id)?.FirstOrDefault();
-
-            if (signedInUser != null)
-            {
-                var newIP = signedInUser?.IPAddress ?? string.Empty;
-                var country = signedInUser?.Country ?? string.Empty;
-                var region = signedInUser?.Region ?? string.Empty;
-                var location = signedInUser?.Location ?? string.Empty;
-                var deviceModel = signedInUser?.DeviceModel ?? string.Empty;
-                string source = (signedInUser?.Source == 1)
-                    ? _localResourceService.GetResource("System.Message.WebApplication")
-                    : _localResourceService.GetResource("System.Message.MobileApplication");
-
-                // Fill dictionary
-                result["Status"] = "Invalid Session";
-                result["IPAddress"] = newIP;
-                result["Country"] = country;
-                result["Region"] = region;
-                result["Location"] = location;
-                result["Source"] = source;
-                result["DeviceModel"] = deviceModel;
-            }
-
-            return result;
         }
 
         #endregion

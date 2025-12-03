@@ -7,6 +7,7 @@ using OfficeOpenXml;
 using System.Data;
 using System.Drawing;
 using System.Security.Claims;
+using System.Threading.Tasks;
 
 namespace DomainServices.Controllers
 {
@@ -76,14 +77,11 @@ namespace DomainServices.Controllers
 
         [Authorize]
         [HttpPost("SubmitData")]
-        public IActionResult SubmitData([FromBody] Dictionary<string, object> body)
+        public async Task<IActionResult> SubmitData([FromBody] SubmitDataRequest data)
         {
-            var data = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["data"].ToString());
-            var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
+            var result = await _coreService.ISubmitData(data, HttpContext.User);
 
-            //var result = _coreService.ISubmitData(data, HttpContext.User, HttpContext.Session);
-
-            return Ok();
+            return Ok(result);
         }
 
         [HttpPost("LoadData")]
@@ -95,14 +93,12 @@ namespace DomainServices.Controllers
 
         [Authorize]
         [HttpPost("LoadDetailData")]
-        public IActionResult LoadDetailData([FromBody] Dictionary<string, object> body)
+        public async Task<IActionResult> LoadDetailData([FromBody] LoadDetailDataRequest data)
         {
-            var data = JsonConvert.DeserializeObject<Dictionary<string, string>>(body["data"].ToString());
-            var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
 
-            //var result = _coreService.ILoadDetailData(data, HttpContext.User, session);
+            var result = await _coreService.ILoadDetailData(data, HttpContext.User);
 
-            return Ok();
+            return Ok(result);
         }
 
 
@@ -144,12 +140,6 @@ namespace DomainServices.Controllers
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
                 return Ok(JsonConvert.SerializeObject(_coreService.IGetFile(data, this.User, HttpContext.Session)));
             }
             catch (Exception err)
@@ -227,12 +217,7 @@ namespace DomainServices.Controllers
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
+                
                 return Ok(JsonConvert.SerializeObject(_coreService.ISetApplicationTheme(data, this.User)));
             }
             catch (Exception err)
@@ -248,12 +233,7 @@ namespace DomainServices.Controllers
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
+                
                 if (User == null || !User.Identity.IsAuthenticated)
                 {
                     return StatusCode(401, "User must login");
@@ -274,12 +254,7 @@ namespace DomainServices.Controllers
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
+                
                 return Ok(JsonConvert.SerializeObject(_coreService.IGetTopicPublished()));
             }
             catch (Exception err)
@@ -294,12 +269,7 @@ namespace DomainServices.Controllers
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
+                
                 return Ok(JsonConvert.SerializeObject(_coreService.IGetTopicDetial(topicName)));
             }
             catch (Exception err)
@@ -315,12 +285,7 @@ namespace DomainServices.Controllers
         {
             try
             {
-                var sessionKey = HttpContext.Session.GetString("sessionKey");
-                var userName = User.Identity.Name;
-                if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-                {
-                    return BadRequest($"Invalid Session|{userName}");
-                }
+                
                 return Ok(JsonConvert.SerializeObject(_coreService.IGenerateAndSendUser(userId)));
             }
             catch (Exception err)

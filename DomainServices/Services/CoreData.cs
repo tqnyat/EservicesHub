@@ -2,10 +2,14 @@
 using DomainServices.Data.Repository;
 using DomainServices.Models;
 using DomainServices.Models.Core;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Data;
+using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Component = DomainServices.Models.Component;
 
@@ -37,61 +41,31 @@ namespace DomainServices.Services
         public async Task<List<Fields>> InitFieldsStrong(Component component, string selectedId, Users user)
         {
             var result = new List<Fields>();
-            var rows = await GetComponentFields(component.Name); // strong metadata
+            var rows = await GetComponentFields(component.Name);
             var connectionString = _commonServices.getConnectionString();
-            var cmd = new SqlCommand();
 
-            // ---------------------------------------------------
-            // NEW ROW → only defaults (no DB read)
-            // ---------------------------------------------------
+            // ----------------------------------------
+            // NEW ROW CASE (selectedId = -1)
+            // ----------------------------------------
             if (selectedId == "-1")
             {
                 foreach (var row in rows)
                 {
-                    var f = new Fields
+                    var f = BuildFieldMetadata(row, user);
+
+                    // -----------------------------
+                    // Build lookup values once
+                    // -----------------------------
+                    if (!string.IsNullOrEmpty(f.LookUpQuery))
                     {
-                        Name = row.Name,
-                        ColumnName = row.ColumnName,
-                        Type = row.DataType,
-                        Visible = row.DisplayInForm,
-                        Required = row.Required,
-                        ReadOnly = row.ReadOnly,
-                        DefaultValue = row.DefaultValue,
-                        FieldSize = row.FieldSize ?? 12,
-
-                        // extra meta
-                        ImmediatePost = row.ImmediatePost,
-                        DisplayInPopup = row.DisplayInPopup,
-                        IsCalc = row.IsCalc,
-                        CalcExpr = row.CalcExpr,
-                        FileDataColumn = row.FileDataColumn,
-                        LookUpQuery = row.LookUp?.ToString(),
-                        label = row.Lable ?? ""
-                    };
-
-                    // Resolve default value → Value
-                    if (!string.IsNullOrWhiteSpace(row.DefaultValue))
-                    {
-                        string dv = row.DefaultValue.Trim().ToLowerInvariant();
-
-                        if (dv == "userid()")
-                            f.Value = user.Id;
-                        else if (dv == "groupid()")
-                            f.Value = user.UserGroupId;
-                        else if (dv == "roleid()")
-                            f.Value = user.RoleId;
-                        else if (dv == "langid()")
-                            f.Value = user.Language;
-                        else if (dv.Contains("[") && dv.Contains("]"))
-                        {
-                            // TODO: handle [OtherField] expression if you use it
-                        }
-                        else
-                        {
-                            f.Value = _commonServices.ExecuteQuery_OneValue(
-                                $"SELECT {row.DefaultValue}", null, connectionString);
-                        }
+                        ApplyLookupValues(f, user, connectionString);
                     }
+
+                    // -----------------------------
+                    // Apply default values only
+                    // -----------------------------
+                    if (!string.IsNullOrWhiteSpace(row.DefaultValue))
+                        f.Value = ResolveDefaultValue(row.DefaultValue, user, connectionString);
 
                     result.Add(f);
                 }
@@ -99,10 +73,11 @@ namespace DomainServices.Services
                 return result;
             }
 
-            // ---------------------------------------------------
-            // EDIT ROW → build SELECT + load row from DB
-            // ---------------------------------------------------
-            var selectColumns = new StringBuilder();
+            // ----------------------------------------
+            // EDIT MODE → Must fetch row values
+            // ----------------------------------------
+            // Build SELECT list
+            var sbSelect = new StringBuilder();
 
             foreach (var row in rows)
             {
@@ -114,21 +89,14 @@ namespace DomainServices.Services
 
                 if (row.IsCalc && !string.IsNullOrEmpty(row.CalcExpr))
                 {
-                    var e = row.CalcExpr;
-
-                    e = CommonServices.ReplaceCaseInsensitive(e, "userid()", $"'{user.Id}'");
-                    e = CommonServices.ReplaceCaseInsensitive(e, "groupid()", $"'{user.UserGroupId}'");
-                    e = CommonServices.ReplaceCaseInsensitive(e, "roleid()", $"'{user.RoleId}'");
-                    e = CommonServices.ReplaceCaseInsensitive(e, "langid()", $"'{user.Language}'");
-
-                    expr = $"({e})";
+                    expr = ApplyCalcExpr(row.CalcExpr, user);
                 }
                 else
                 {
                     expr = $"{component.TableName}.{row.ColumnName}";
                 }
 
-                // same formatting rules you used before
+                // Type formatting
                 if (row.DataType.Equals("Date", StringComparison.OrdinalIgnoreCase))
                     expr = $"CONVERT(NVARCHAR, {expr}, 20)";
                 else if (row.DataType.Equals("DateTime", StringComparison.OrdinalIgnoreCase))
@@ -136,45 +104,160 @@ namespace DomainServices.Services
                 else if (row.DataType.Equals("Time", StringComparison.OrdinalIgnoreCase))
                     expr = $"FORMAT({expr}, 'hh:mm tt', 'en-US')";
 
-                selectColumns.Append($"{expr} AS {alias},");
+                sbSelect.Append($"{expr} AS {alias},");
             }
 
-            var selectClause = selectColumns.ToString().TrimEnd(',');
-            var sql = $"SELECT {selectClause} FROM {component.TableName} WHERE Id = @Id";
+            string selectClause = sbSelect.ToString().TrimEnd(',');
+            string sql = $"SELECT {selectClause} FROM {component.TableName} WHERE Id = @Id";
 
-            cmd.Parameters.Clear();
+            var cmd = new SqlCommand();
             cmd.Parameters.AddWithValue("@Id", selectedId);
 
+            // get 1 record
             var dbRow = await _commonServices.ExecuteSingleRow(sql, cmd, connectionString);
 
+            // ----------------------------------------
+            // Build fields (never overwrite metadata)
+            // ----------------------------------------
             foreach (var row in rows)
             {
-                var f = new Fields
-                {
-                    Name = row.Name,
-                    ColumnName = row.ColumnName,
-                    Type = row.DataType,
-                    Visible = row.DisplayInForm,
-                    Required = row.Required,
-                    ReadOnly = row.ReadOnly,
-                    DefaultValue = row.DefaultValue,
-                    FieldSize = row.FieldSize ?? 12,
+                // good fields always come from metadata
+                var f = BuildFieldMetadata(row, user);
 
-                    ImmediatePost = row.ImmediatePost,
-                    DisplayInPopup = row.DisplayInPopup,
-                    IsCalc = row.IsCalc,
-                    CalcExpr = row.CalcExpr,
-                    FileDataColumn = row.FileDataColumn,
-                    LookUpQuery = row.LookUp?.ToString(),
-                    label = row.Lable ?? "",
+                // lookup values (unchanged in edit mode)
+                if (!string.IsNullOrEmpty(f.LookUpQuery))
+                    ApplyLookupValues(f, user, connectionString);
 
-                    Value = (dbRow != null && dbRow.TryGetValue(row.Name, out var val)) ? val : null
-                };
+                // apply DB value only
+                if (dbRow != null && dbRow.ContainsKey(row.Name))
+                    f.Value = dbRow[row.Name];
 
                 result.Add(f);
             }
 
             return result;
+        }
+        private Fields BuildFieldMetadata(ComponentFieldsDto row, Users user)
+        {
+            return new Fields
+            {
+                Name = row.Name,
+                ColumnName = row.ColumnName,
+                DefaultValue = row.DefaultValue,
+                Visible = row.DisplayInForm,
+                ReadOnly = row.ReadOnly,
+                Required = row.Required,
+                Type = row.DataType,
+                LookUpQuery = row.LookUp?.ToString(),
+                ImmediatePost = row.ImmediatePost,
+                DisplayInPopup = row.DisplayInPopup,
+                IsCalc = row.IsCalc,
+                CalcExpr = row.CalcExpr,
+                FileDataColumn = row.FileDataColumn,
+                FileDataValue = "",
+                FieldSize = row.FieldSize ?? 12,
+                label = row.Lable ?? ""
+            };
+        }
+        private void ApplyLookupValues(Fields f, Users user, string connectionString)
+        {
+            var cmd = new SqlCommand();
+
+            // Load lookup header
+            string headerSql = "SELECT * FROM LookUps WHERE Id = @Id";
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("@Id", f.LookUpQuery);
+
+            DataShape headerShape =
+                _commonServices.ExecuteQuery_DataShape(headerSql, cmd, connectionString);
+
+            if (headerShape.Rows.Count == 0)
+                throw new Exception("LookUp does not exist.");
+
+            var header = headerShape.Rows[0];
+            var lookupType = header["Type"]?.ToString() ?? "0";
+
+            // ----------------------------------
+            // Lookup Type = 1 → LookUpDetail
+            // ----------------------------------
+            if (lookupType == "1")
+            {
+                f.Type = "lookup-1";
+
+                string col = user.Language.Contains("en") ? "Name" : "NameAr";
+
+                string sql =
+                    $"SELECT TOP 500 {col} AS Name, Code FROM LookUpDetail WHERE LookUpId = @LID";
+
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@LID", header["Id"]);
+
+                DataShape values =
+                    _commonServices.ExecuteQuery_DataShape(sql, cmd, connectionString);
+
+                f.LookUpQuery = sql;
+                f.LookUpValues = _commonServices.GetLookupListFormDataTable(values);
+            }
+
+            // ----------------------------------
+            // Lookup Type = 2 → Component-based
+            // ----------------------------------
+            else if (lookupType == "2")
+            {
+                f.Type = "lookup-1";
+
+                string sqlMeta =
+                    "SELECT C.Id, C.Name, C.TableName, " +
+                    "CASE WHEN IsCalc = 1 THEN C.CalcExpr ELSE C.ColumnName END ColumnName, " +
+                    "C.CalcExpr, L.FieldCode, L.FieldValue, L.SearchSpec " +
+                    "FROM ComponentField C, LookUps L " +
+                    "WHERE L.Component = C.ComponentId AND L.Id = @LID";
+
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@LID", header["Id"]);
+
+                DataShape meta = _commonServices.ExecuteQuery_DataShape(sqlMeta, cmd, connectionString);
+
+                string finalSql = BuildLookUpQuery(new List<Fields>(), meta, header["Name"]?.ToString());
+                finalSql = AddUserAttributes(finalSql, user);
+
+                f.LookUpQuery = finalSql;
+
+                DataShape values =
+                    _commonServices.ExecuteQuery_DataShape(finalSql, cmd, connectionString);
+
+                f.LookUpValues = _commonServices.GetLookupListFormDataTable(values);
+            }
+        }
+        private object ResolveDefaultValue(string dv, Users user, string connectionString)
+        {
+            dv = dv.Trim().ToLower();
+
+            if (dv == "userid()") return user.Id;
+            if (dv == "groupid()") return user.UserGroupId;
+            if (dv == "roleid()") return user.RoleId;
+            if (dv == "langid()") return user.Language;
+
+            if (dv.Contains("[") && dv.Contains("]"))
+                return null; // unchanged legacy
+
+            return _commonServices.ExecuteQuery_OneValue($"SELECT {dv}", null, connectionString);
+        }
+        private string ApplyCalcExpr(string expr, Users user)
+        {
+            if (expr.Contains("userid()", StringComparison.OrdinalIgnoreCase))
+                expr = CommonServices.ReplaceCaseInsensitive(expr, "userid()", $"'{user.Id}'");
+
+            if (expr.Contains("groupid()", StringComparison.OrdinalIgnoreCase))
+                expr = CommonServices.ReplaceCaseInsensitive(expr, "groupid()", $"'{user.UserGroupId}'");
+
+            if (expr.Contains("roleid()", StringComparison.OrdinalIgnoreCase))
+                expr = CommonServices.ReplaceCaseInsensitive(expr, "roleid()", $"'{user.RoleId}'");
+
+            if (expr.Contains("langid()", StringComparison.OrdinalIgnoreCase))
+                expr = CommonServices.ReplaceCaseInsensitive(expr, "langid()", $"'{user.Language}'");
+
+            return $"({expr})";
         }
 
         public string AddUserAttributes(string queryText, Users user)
@@ -285,7 +368,384 @@ namespace DomainServices.Services
 
             return result;
         }
+        public string BuildLookUpQuery(List<Fields> fields, DataShape lookUpShape, string componentName)
+        {
+            // -----------------------------------------
+            // Extract first lookup row
+            // -----------------------------------------
+            if (lookUpShape?.Rows == null || lookUpShape.Rows.Count == 0)
+                throw new Exception("LookUp: LookUps table is empty.");
 
+            var first = lookUpShape.Rows[0];
+
+            var fieldCodeId = first["FieldCode"]?.ToString();
+            var fieldValueId = first["FieldValue"]?.ToString();
+            var tableName = first["TableName"]?.ToString();
+            var searchSpec = first["SearchSpec"]?.ToString();
+
+            if (string.IsNullOrWhiteSpace(fieldCodeId) ||
+                string.IsNullOrWhiteSpace(fieldValueId) ||
+                string.IsNullOrWhiteSpace(tableName))
+                throw new Exception("LookUp: Missing mandatory fields (FieldCode, FieldValue, TableName).");
+
+            // -----------------------------------------
+            // Resolve ColumnName for FieldCode + FieldValue
+            // -----------------------------------------
+            string fieldCode = null;
+            string fieldName = null;
+
+            foreach (var row in lookUpShape.Rows)
+            {
+                if (row["Id"]?.ToString() == fieldCodeId)
+                    fieldCode = row["ColumnName"]?.ToString();
+
+                if (row["Id"]?.ToString() == fieldValueId)
+                    fieldName = row["ColumnName"]?.ToString();
+            }
+
+            if (fieldCode == null || fieldName == null)
+                throw new Exception("LookUp: Could not resolve lookup code/name column mapping.");
+
+            // -----------------------------------------
+            // Parse SearchSpec into SQL
+            // -----------------------------------------
+            string sqlWhere = "";
+            if (!string.IsNullOrWhiteSpace(searchSpec))
+            {
+                // Split tokens: same legacy behavior
+                string[] tokens = searchSpec.Split(
+                    new string[] { "[", "]" },
+                    StringSplitOptions.RemoveEmptyEntries);
+
+                string[] staticOps = { "=", ">", "<", "<>", "and", "or", "between", "(", ")" };
+                var searchParts = new List<SearchField>();
+
+                for (int i = 0; i < tokens.Length; i++)
+                {
+                    var token = tokens[i].Trim();
+                    var sf = new SearchField();
+
+                    if (token == "P")
+                    {
+                        sf.FieldName = tokens[++i];
+                        sf.Type = "Parent";
+                    }
+                    else if (token == "S")
+                    {
+                        sf.FieldName = tokens[++i];
+                        sf.Type = "Session";
+                    }
+                    else if (staticOps.Contains(token.ToLower()))
+                    {
+                        sf.FieldName = token;
+                        sf.FieldValue = token;
+                        sf.Type = "Static";
+                    }
+                    else
+                    {
+                        sf.FieldName = token;
+                        sf.Type = "Field";
+                    }
+
+                    searchParts.Add(sf);
+                }
+
+                var sb = new StringBuilder();
+
+                foreach (var sf in searchParts)
+                {
+                    if (sf.Type == "Parent")
+                    {
+                        // get value from Fields list
+                        var f = fields.FirstOrDefault(z => z.Name == sf.FieldName);
+                        if (f == null)
+                            throw new Exception($"LookUp SearchSpec Error: Field '{sf.FieldName}' not found.");
+
+                        sb.Append(" ")
+                          .Append(string.IsNullOrEmpty(f.Value?.ToString()) ? "NULL" : f.Value)
+                          .Append(" ");
+                    }
+                    else if (sf.Type == "Field")
+                    {
+                        var compField = fields.FirstOrDefault(z => z.Name == sf.FieldName);
+                        if (compField != null)
+                        {
+                            sb.Append(" ").Append(compField.ColumnName).Append(" ");
+                            continue;
+                        }
+
+                        sb.Append(" ").Append(sf.FieldName).Append(" ");
+                    }
+                    else if (sf.Type == "Session")
+                    {
+                        // not implemented in old version — keep empty
+                        sb.Append(" ");
+                    }
+                    else
+                    {
+                        sb.Append(" ").Append(sf.FieldValue).Append(" ");
+                    }
+                }
+
+                sqlWhere = sb.ToString().Trim();
+            }
+
+            // -----------------------------------------
+            // Build final query
+            // -----------------------------------------
+            var queryText = new StringBuilder();
+
+            queryText.Append($"SELECT TOP(500) {fieldCode} Code, {fieldName} Name FROM {tableName}");
+
+            if (!string.IsNullOrWhiteSpace(sqlWhere))
+                queryText.Append(" WHERE ").Append(sqlWhere);
+
+            return queryText.ToString();
+        }
+
+        #region SubmitData - Helpers
+        public object NormalizeValue(object raw)
+        {
+            if (raw == null)
+                return null;
+
+            if (raw is JsonElement el)
+            {
+                switch (el.ValueKind)
+                {
+                    case JsonValueKind.String:
+                        return el.GetString();
+
+                    case JsonValueKind.Number:
+                        if (el.TryGetInt64(out var l)) return l;
+                        if (el.TryGetDouble(out var d)) return d;
+                        return el.GetRawText();
+
+                    case JsonValueKind.True:
+                        return true;
+
+                    case JsonValueKind.False:
+                        return false;
+
+                    case JsonValueKind.Null:
+                    case JsonValueKind.Undefined:
+                        return null;
+
+                    default:
+                        return el.ToString();
+                }
+            }
+
+            return raw;
+        }
+        public object ConvertFieldValue(string? type, object value)
+        {
+            if (value == null) return null;
+
+            type = type?.ToLower() ?? "";
+
+            switch (type)
+            {
+                case "checkbox":
+                    return Convert.ToBoolean(value);
+
+                case "date":
+                    return DateTime.ParseExact(value.ToString(), "dd/MM/yyyy", CultureInfo.InvariantCulture);
+
+                case "datetime":
+                    return DateTime.ParseExact(value.ToString(), "yyyy-MM-ddTHH:mm", CultureInfo.InvariantCulture);
+
+                case "time":
+                    return DateTime.ParseExact(value.ToString(), "hh:mm tt", CultureInfo.InvariantCulture);
+
+                default:
+                    return value;
+            }
+        }
+        public void HandleFileInsert(Fields row, StringBuilder cols, StringBuilder vals)
+        {
+            if (!string.IsNullOrWhiteSpace(row.FileDataColumn))
+            {
+                if (row.FileDataColumn == "clear-old-data")
+                {
+                    cols.Append("'',");
+                    vals.Append("@" + row.Name + ",");
+
+                    cols.Append("'',");
+                    vals.Append("@" + row.FileDataColumn + ",");
+                }
+                else
+                {
+                    cols.Append(row.ColumnName + ",");
+                    vals.Append("@" + row.Name + ",");
+
+                    cols.Append(row.FileDataColumn + ",");
+                    vals.Append("@" + row.FileDataColumn + ",");
+                }
+            }
+            else
+            {
+                cols.Append(row.ColumnName + ",");
+                vals.Append("@" + row.Name + ",");
+            }
+        }
+        public void HandleFileUpdate(Fields row, StringBuilder set)
+        {
+            var hasData = !string.IsNullOrWhiteSpace(row.FileDataValue);
+
+            if (string.IsNullOrEmpty(row.FileDataColumn))
+            {
+                set.Append($"{row.ColumnName} = @{row.Name},");
+                return;
+            }
+
+            // new or updated file
+            if (hasData && row.FileDataValue != "clear-old-file")
+            {
+                set.Append($"{row.ColumnName} = @{row.Name},");
+                set.Append($"{row.FileDataColumn} = @{row.FileDataColumn},");
+            }
+            else if (hasData && row.FileDataValue == "clear-old-file")
+            {
+                set.Append($"{row.ColumnName} = @{row.Name},");
+                set.Append($"{row.FileDataColumn} = @{row.FileDataColumn},");
+            }
+            else
+            {
+                // file not changed → update only file name
+                set.Append($"{row.ColumnName} = @{row.Name},");
+            }
+        }
+        public void AddSqlParameter(SqlCommand cmd, Fields row)
+        {
+            string p = "@" + row.Name;
+
+            if (row.Type?.ToLower() == "file")
+            {
+                // File main column → string (file name)
+                cmd.Parameters.AddWithValue(p,
+                    string.IsNullOrWhiteSpace(row.Value?.ToString())
+                        ? (object)DBNull.Value
+                        : row.Value.ToString());
+
+                // FileDataColumn → bytes
+                if (!string.IsNullOrWhiteSpace(row.FileDataColumn))
+                {
+                    string d = row.FileDataValue ?? "";
+                    string p2 = "@" + row.FileDataColumn;
+
+                    if (d == "clear-old-file")
+                        cmd.Parameters.AddWithValue(p2, Array.Empty<byte>());
+                    else if (!string.IsNullOrWhiteSpace(d))
+                        cmd.Parameters.AddWithValue(p2, Convert.FromBase64String(d));
+                    else
+                        cmd.Parameters.AddWithValue(p2, DBNull.Value);
+                }
+            }
+            else
+            {
+                cmd.Parameters.AddWithValue(p,
+                    row.Value == null || string.IsNullOrWhiteSpace(row.Value.ToString())
+                        ? (object)DBNull.Value
+                        : row.Value);
+            }
+        }
+        public string BuildFinalSql(string saveType, string tableName, SqlCommand cmd, StringBuilder insertCols, StringBuilder insertVals, StringBuilder updateSet, string parentField, string parentFieldValue, bool hasGroupId, Users user, string selectedId, out string rowId)
+        {
+            rowId = selectedId;
+            string sql = "";
+
+            if (saveType == "new")
+            {
+                if (parentField != "1" && !string.IsNullOrWhiteSpace(parentFieldValue))
+                {
+                    insertCols.Append(parentField + ",");
+                    insertVals.Append("'" + parentFieldValue + "',");
+                }
+
+                insertCols.Append("CreatedBy,LastUpdBy");
+                insertVals.Append($"'{user.Id}','{user.Id}'");
+
+                if (!hasGroupId)
+                {
+                    insertCols.Append(",GroupId");
+                    insertVals.Append($",{user.UserGroupId}");
+                }
+
+                sql = $"INSERT INTO {tableName} ({insertCols.ToString().TrimEnd(',')}) " +
+                      $"VALUES ({insertVals.ToString().TrimEnd(',')}); SELECT SCOPE_IDENTITY();";
+            }
+            else
+            {
+                updateSet.Append($"LastUpdBy='{user.Id}',LastUpd=GETDATE()");
+                cmd.Parameters.AddWithValue("@SelectedId", selectedId);
+
+                sql = $"UPDATE {tableName} SET {updateSet.ToString().TrimEnd(',')} WHERE Id=@SelectedId; SELECT @SelectedId;";
+            }
+
+            return sql;
+        }
+        public void ExecuteSubmitSql(string sql, SqlCommand cmd, Component component, Users user, string saveType, ref string rowId)
+        {
+            var con = new SqlConnection(_commonServices.getConnectionString());
+            SqlTransaction trx = null;
+
+            try
+            {
+                con.Open();
+                trx = con.BeginTransaction();
+
+                cmd.Connection = con;
+                cmd.Transaction = trx;
+                cmd.CommandType = CommandType.Text;
+                cmd.CommandText = sql;
+
+                var result = cmd.ExecuteScalar();
+                if (result != null && result != DBNull.Value)
+                    rowId = result.ToString();
+
+                // --- Call stored procedures (legacy)
+                if (saveType == "new" && !string.IsNullOrEmpty(component.OnCreateProc))
+                {
+                    var c2 = new SqlCommand(component.OnCreateProc, con, trx);
+                    c2.CommandType = CommandType.StoredProcedure;
+                    c2.Parameters.AddWithValue("@RowId", rowId);
+                    c2.ExecuteNonQuery();
+                }
+                else if (saveType == "edit" && !string.IsNullOrEmpty(component.OnUpdateProc))
+                {
+                    var c2 = new SqlCommand(component.OnUpdateProc, con, trx);
+                    c2.CommandType = CommandType.StoredProcedure;
+                    c2.Parameters.AddWithValue("@RowId", rowId);
+                    c2.ExecuteNonQuery();
+                }
+
+                trx.Commit();
+            }
+            catch
+            {
+                trx?.Rollback();
+                throw;
+            }
+            finally
+            {
+                if (con.State != ConnectionState.Closed)
+                    con.Close();
+            }
+        }
+        public SubmitDataResultDto FailArabic(string msg, DataShape shape)
+        {
+            return new SubmitDataResultDto
+            {
+                ExceptionError = msg,
+                UpdatedSession = new Dictionary<string, object>
+        {
+            { "CoreDataView", JsonConvert.SerializeObject(shape) }
+        }
+            };
+        }
+
+        #endregion
         #region LoadData - Helpers  
         // ----------------------------------------------
         // SQL → List<Dictionary<string,object>>
@@ -493,8 +953,8 @@ namespace DomainServices.Services
             {
                 FieldName = r["Name"]?.ToString() ?? "",
                 TableName = (r["TableName"]?.ToString() ?? "").ToLower() == "transactions"
-                            ? component.TableName
-                            : r["TableName"]?.ToString(),
+                ? component.TableName
+                : r["TableName"]?.ToString(),
                 TableColumn = r["ColumnName"]?.ToString() ?? "",
                 DataType = r["DataType"]?.ToString() ?? "",
                 DisplayInList = Convert.ToBoolean(r["DisplayInList"]),
@@ -513,7 +973,22 @@ namespace DomainServices.Services
 
                 sbSelect.Append($"{col} {f.FieldName},");
             }
+            foreach (var f in fields)
+            {
+                if (f.FieldName.Equals(view.CompFieldName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (f.IsCalc)
+                    {
+                        view.CompFieldName = ReplaceCalcDefaults(f.CalcExpression, user);
+                    }
+                    else
+                    {
+                        view.CompFieldName = $"{f.TableName}.{f.TableColumn}";
+                    }
+                    break;
+                }
 
+            }
             string selectColumns = sbSelect.ToString().TrimEnd(',');
 
             // ---- access filter
