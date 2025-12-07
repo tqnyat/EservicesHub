@@ -1,13 +1,8 @@
 using DomainServices.Models.Core;
 using DomainServices.Services;
+using EservicesHub.Models.Core;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Newtonsoft.Json;
-using OfficeOpenXml;
-using System.Data;
-using System.Drawing;
-using System.Security.Claims;
-using System.Threading.Tasks;
 
 namespace DomainServices.Controllers
 {
@@ -17,32 +12,16 @@ namespace DomainServices.Controllers
     {
         #region Filds
         private readonly CoreServices _coreService;
-        private readonly CommonServices _commonServices;
         #endregion
 
         #region Constructor
-        public CoreController(CoreServices coreService, CommonServices commonServices)
+        public CoreController(CoreServices coreService)
         {
             _coreService = coreService;
-            _commonServices = commonServices;
         }
         #endregion
 
         #region Methods
-
-        [HttpGet]
-        [Route("IsAuthenticated")]
-        public IActionResult IsAuthenticated()
-        {
-            try
-            {
-                return Ok(JsonConvert.SerializeObject(_coreService.IsAuthenticated(this.User)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
 
 
         [Authorize, HttpGet("GetUserViews")]
@@ -56,8 +35,7 @@ namespace DomainServices.Controllers
             return Ok(result);
         }
 
-        [Authorize]
-        [HttpPost("GetViewDefinition")]
+        [Authorize, HttpPost("GetViewDefinition")]
         public async Task<IActionResult> GetViewDefinition([FromBody] Dictionary<string, string> data)
         {
 
@@ -75,8 +53,7 @@ namespace DomainServices.Controllers
             return Ok(result);
         }
 
-        [Authorize]
-        [HttpPost("SubmitData")]
+        [Authorize, HttpPost("SubmitData")]
         public async Task<IActionResult> SubmitData([FromBody] SubmitDataRequest data)
         {
             var result = await _coreService.ISubmitData(data, HttpContext.User);
@@ -84,15 +61,14 @@ namespace DomainServices.Controllers
             return Ok(result);
         }
 
-        [HttpPost("LoadData")]
-        public async Task<IActionResult> LoadData([FromBody] LoadDataRequest t)
+        [Authorize, HttpPost("LoadData")]
+        public async Task<IActionResult> LoadData([FromBody] LoadDataRequest request)
         {
-            var result = await _coreService.ILoadData(t, HttpContext.User);
+            var result = await _coreService.ILoadData(request, HttpContext.User);
             return Ok(result);
         }
 
-        [Authorize]
-        [HttpPost("LoadDetailData")]
+        [Authorize, HttpPost("LoadDetailData")]
         public async Task<IActionResult> LoadDetailData([FromBody] LoadDetailDataRequest data)
         {
 
@@ -100,7 +76,6 @@ namespace DomainServices.Controllers
 
             return Ok(result);
         }
-
 
         [Authorize, HttpPost("EditRowData")]
         public async Task<IActionResult> EditRowData([FromBody] EditRowRequest data)
@@ -117,181 +92,74 @@ namespace DomainServices.Controllers
             }
         }
 
-
-
-
-        [Authorize]
-        [HttpPost("DeleteRowData")]
-        public IActionResult DeleteRowData([FromBody] Dictionary<string, object> body)
+        [Authorize, HttpPost("DeleteRowData")]
+        public async Task<IActionResult> DeleteRowData([FromBody] DeleteRowRequest data)
         {
-            var data = JsonConvert.DeserializeObject<Dictionary<string, string>>(body["data"].ToString());
-            var session = JsonConvert.DeserializeObject<Dictionary<string, object>>(body["session"].ToString());
+            var result = await _coreService.IDeleteRowData(data, HttpContext.User);
 
-            var result = _coreService.IDeleteRowData(data, HttpContext.User, HttpContext.Session);
+            return Ok(result);
+        }
+
+        [Authorize, HttpPost, Route("GetFile")]
+        public async Task<IActionResult> GetFile([FromBody] IGetFileRequest data)
+        {
+            var result = await _coreService.IGetFile(data);
+
+            return Ok(result);
+        }
+
+        [Authorize, HttpPost("ExportExcel")]
+        public async Task<IActionResult> ExportExcel([FromBody] ExportExcelRequest data)
+        {
+            // Simply call the service, no session, no Excel, no extras
+            DataShape ds = await _coreService.IExportExcel(data, HttpContext.User);
+
+            return Ok(ds);
+        }
+
+        [Authorize, HttpPost("SetApplicationTheme")]
+        public async Task<IActionResult> SetApplicationTheme([FromBody] ApplicationThemeRequest data)
+        {
+            var result = await _coreService.ISetApplicationTheme(data, HttpContext.User);
+
+            return Ok(result);
+            
+        }
+
+        [Authorize, HttpPost("GetSystemLookUp")]
+        public async Task<IActionResult> GetSystemLookUp([FromBody] Dictionary<string, string> data)
+        {
+            var result = await _coreService.IGetSystemLookUp(data);
+
+            return Ok(result);
+        }
+
+        [HttpPost("GetTopicsPublished")]
+        public async Task<IActionResult> GetTopicsPublished()
+        {
+            var result = await _coreService.IGetTopicPublished();
 
             return Ok(result);
         }
 
         [ValidateAntiForgeryToken]
-        [Authorize]
-        [HttpPost]
-        [Route("GetFile")]
-        public IActionResult GetFile([FromBody] Dictionary<string, string> data)
-        {
-            try
-            {
-                return Ok(JsonConvert.SerializeObject(_coreService.IGetFile(data, this.User, HttpContext.Session)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-
-
-        //[Authorize]
-        //[HttpGet]
-        //[Route("ExportExcel")]
-        //public IActionResult ExportExcel(string componentName)
-        //{
-        //    try
-        //    {
-        //        var sessionKey = HttpContext.Session.GetString("sessionKey");
-        //        var userName = User.Identity.Name;
-        //        if (!_coreService.IsValidSession(this.User, HttpContext.Session, sessionKey).Result)
-        //        {
-        //            return BadRequest("Invalid Session | " + userName);
-        //        }
-        //        DataTable dt = _coreService.IExportExcel(componentName, HttpContext.Session);
-
-        //        if (dt != null && dt.Rows.Count > 0)
-        //        {
-        //            string fileName = componentName + ".xlsx";
-        //            string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-        //            var stream = _commonServices.ExportDataTable("Approvers", dt);
-
-        //            return File(stream, contentType, fileName);
-        //        }
-        //        else
-        //        {
-        //            ExcelPackage.License.SetNonCommercialPersonal("Colllecta");
-        //            using (var package = new ExcelPackage())
-        //            {
-        //                var worksheet = package.Workbook.Worksheets.Add("Sheet1");
-        //                Color myColor = Color.FromArgb(102, 68, 38, 207);
-
-        //                // Add column headers and set their style
-        //                for (int i = 0; i < dt.Columns.Count; i++)
-        //                {
-        //                    worksheet.Cells[1, i + 1].Value = dt.Columns[i].ColumnName;
-        //                    worksheet.Cells[1, i + 1].Style.Font.Bold = true; // Make text bold
-        //                    worksheet.Cells[1, i + 1].Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid; // Set fill pattern
-        //                    worksheet.Cells[1, i + 1].Style.Fill.BackgroundColor.SetColor(myColor); // Set background color
-        //                    worksheet.Cells[1, i + 1].Style.Font.Color.SetColor(System.Drawing.Color.White); // Set text color to white
-        //                }
-
-        //                worksheet.Cells.AutoFitColumns();
-        //                var stream = new MemoryStream();
-        //                package.SaveAs(stream);
-        //                string fileName = componentName + ".xlsx";
-        //                string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-        //                return File(stream.ToArray(), contentType, fileName);
-        //            }
-        //        }
-        //    }
-        //    catch (Exception err)
-        //    {
-        //        return BadRequest(new
-        //        {
-        //            ExceptionError = _commonServices.getExceptionErrorMessage(err)
-        //        });
-        //    }
-        //}
-
-        [ValidateAntiForgeryToken]
-        [Authorize]
-        [HttpPost]
-        [Route("SetApplicationTheme")]
-        public IActionResult SetApplicationTheme([FromBody] Dictionary<string, string> data)
-        {
-            try
-            {
-                
-                return Ok(JsonConvert.SerializeObject(_coreService.ISetApplicationTheme(data, this.User)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-
-        [Authorize]
-        [HttpPost]
-        [Route("GetSystemLookUp")]
-        public IActionResult GetSystemLookUp([FromBody] Dictionary<string, string> data)
-        {
-            try
-            {
-                
-                if (User == null || !User.Identity.IsAuthenticated)
-                {
-                    return StatusCode(401, "User must login");
-                }
-                return Ok(JsonConvert.SerializeObject(_coreService.IGetSystemLookUp(data)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-
-
-        [ValidateAntiForgeryToken]
-        [HttpPost]
-        [Route("GetTopicsPublished")]
-        public IActionResult GetTopicsPublished()
-        {
-            try
-            {
-                
-                return Ok(JsonConvert.SerializeObject(_coreService.IGetTopicPublished()));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
-        }
-        [ValidateAntiForgeryToken]
         [HttpPost]
         [Route("GetTopicDetial")]
-        public IActionResult GetTopicDetial(Dictionary<string, string> topicName)
+        public async Task<IActionResult> GetTopicDetial(TopicDetailRequest data)
         {
-            try
-            {
-                
-                return Ok(JsonConvert.SerializeObject(_coreService.IGetTopicDetial(topicName)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
+            var result = await _coreService.IGetTopicDetial(data);
+
+            return Ok(result);
         }
 
-        [ValidateAntiForgeryToken]
         [HttpPost]
         [Route("GenerateAndSendUser")]
-        public IActionResult GenerateAndSendUser([FromHeader] string userId)
+        public async Task<IActionResult> GenerateAndSendUser([FromHeader] GenerateAndSendUserRequest data)
         {
-            try
-            {
-                
-                return Ok(JsonConvert.SerializeObject(_coreService.IGenerateAndSendUser(userId)));
-            }
-            catch (Exception err)
-            {
-                return StatusCode(500, new { ExceptionError = _commonServices.getExceptionErrorMessage(err) });
-            }
+            var result = await _coreService.IGenerateAndSendUser(data);
+
+            return Ok(result);
+            
         }
         #endregion
     }

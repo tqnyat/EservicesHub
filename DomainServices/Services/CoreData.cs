@@ -21,7 +21,6 @@ namespace DomainServices.Services
 
         private readonly CommonServices _commonServices;
         private readonly DomainDBContext.DomainRepo _domainRepo;
-        public SharedVariable sharedVariable;
 
         #endregion
 
@@ -31,7 +30,6 @@ namespace DomainServices.Services
         {
             _commonServices = commonServices;
             _domainRepo = domainRepo;
-            sharedVariable = new SharedVariable();
         }
 
         #endregion
@@ -196,7 +194,7 @@ namespace DomainServices.Services
                     _commonServices.ExecuteQuery_DataShape(sql, cmd, connectionString);
 
                 f.LookUpQuery = sql;
-                f.LookUpValues = _commonServices.GetLookupListFormDataTable(values);
+                f.LookUpValues = _commonServices.GetLookupListFormDataShape(values);
             }
 
             // ----------------------------------
@@ -226,7 +224,7 @@ namespace DomainServices.Services
                 DataShape values =
                     _commonServices.ExecuteQuery_DataShape(finalSql, cmd, connectionString);
 
-                f.LookUpValues = _commonServices.GetLookupListFormDataTable(values);
+                f.LookUpValues = _commonServices.GetLookupListFormDataShape(values);
             }
         }
         private object ResolveDefaultValue(string dv, Users user, string connectionString)
@@ -750,10 +748,7 @@ namespace DomainServices.Services
         // ----------------------------------------------
         // SQL → List<Dictionary<string,object>>
         // ----------------------------------------------
-        public List<Dictionary<string, object>> ExecuteListDictionary(
-            string query,
-            SqlCommand cmd,
-            string connectionString)
+        public List<Dictionary<string, object>> ExecuteListDictionary(string query, SqlCommand cmd, string connectionString)
         {
             var list = new List<Dictionary<string, object>>();
 
@@ -785,62 +780,6 @@ namespace DomainServices.Services
         }
 
         // ----------------------------------------------
-        // Convert SqlCommand → byte[] (for caching)
-        // ----------------------------------------------
-        public byte[] ConvertSqlCommandToByte(SqlCommand cmd)
-        {
-            var snapshot = new SerializableSqlCommand
-            {
-                CommandText = cmd.CommandText,
-                Parameters = cmd.Parameters
-                    .Cast<SqlParameter>()
-                    .Select(p => new SerializableSqlParam
-                    {
-                        Name = p.ParameterName,
-                        Type = p.SqlDbType,
-                        Value = p.Value
-                    }).ToList()
-            };
-
-            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(snapshot));
-        }
-
-        // ----------------------------------------------
-        // Convert byte[] → SqlCommand
-        // ----------------------------------------------
-        public SqlCommand GetSqlCommanFromByte(byte[] data)
-        {
-            if (data == null || data.Length == 0)
-                return null;
-
-            var json = Encoding.UTF8.GetString(data);
-            var snapshot = JsonConvert.DeserializeObject<SerializableSqlCommand>(json);
-
-            var cmd = new SqlCommand();
-            cmd.CommandText = snapshot.CommandText;
-
-            foreach (var p in snapshot.Parameters)
-            {
-                cmd.Parameters.Add(new SqlParameter(p.Name, p.Type) { Value = p.Value });
-            }
-
-            return cmd;
-        }
-
-        // Serializable wrapper
-        class SerializableSqlCommand
-        {
-            public string CommandText { get; set; }
-            public List<SerializableSqlParam> Parameters { get; set; }
-        }
-        class SerializableSqlParam
-        {
-            public string Name { get; set; }
-            public SqlDbType Type { get; set; }
-            public object Value { get; set; }
-        }
-
-        // ----------------------------------------------
         // Replace Calc Defaults (user attributes)
         // ----------------------------------------------
         public string ReplaceCalcDefaults(string expr, Users user)
@@ -856,81 +795,134 @@ namespace DomainServices.Services
         // ----------------------------------------------
         // BUILD SEARCH CONDITIONS
         // ----------------------------------------------
-        public string BuildSearchConditions(
-            Dictionary<string, string> search,
-            List<ComponentDetail> meta,
-            SqlCommand cmd)
+        public string BuildSearchConditions(Dictionary<string, string> search, List<ComponentDetail> meta, SqlCommand cmd)
         {
             if (search == null || search.Count == 0)
                 return "";
 
-            string result = "";
+            var where = new StringBuilder();
 
-            foreach (var item in search)
+            foreach (var kv in search)
             {
-                string key = item.Key;
-                string userValue = item.Value;
+                string rawKey = kv.Key;
+                string value = kv.Value;
 
-                if (string.IsNullOrEmpty(userValue)) continue;
+                if (string.IsNullOrWhiteSpace(value))
+                    continue;
 
+                // --------------------------
+                // Detect Date From/To
+                // --------------------------
+                string key = rawKey;
                 string dateSide = "";
-                if (key.Contains("_From"))
+
+                if (rawKey.EndsWith("_From"))
                 {
-                    key = key.Replace("_From", "");
+                    key = rawKey.Replace("_From", "");
                     dateSide = "From";
                 }
-                else if (key.Contains("_To"))
+                else if (rawKey.EndsWith("_To"))
                 {
-                    key = key.Replace("_To", "");
+                    key = rawKey.Replace("_To", "");
                     dateSide = "To";
                 }
 
-                var field = meta.FirstOrDefault(f => f.FieldName == key);
+                // Get field metadata
+                var field = meta.FirstOrDefault(x =>
+                    x.FieldName.Equals(key, StringComparison.OrdinalIgnoreCase));
+
                 if (field == null) continue;
 
-                result += (result != "") ? " AND " : "";
+                // Build SQL LEFT side of condition
+                string left = field.IsCalc
+                    ? field.CalcExpression
+                    : $"{field.TableName}.{field.TableColumn}";
 
-                string left = field.IsCalc ? field.CalcExpression : $"{field.TableName}.{field.TableColumn}";
-                result += left;
+                if (where.Length > 0)
+                    where.Append(" AND ");
 
-                if (dateSide == "From") result += " >= ";
-                else if (dateSide == "To") result += " <= ";
+                where.Append(left);
+
+                // --------------------------
+                // Add comparison operators
+                // --------------------------
+                if (dateSide == "From")
+                {
+                    where.Append(" >= ");
+                }
+                else if (dateSide == "To")
+                {
+                    where.Append(" <= ");
+                }
                 else
                 {
-                    result += field.DataType.ToLower() == "text"
-                        ? " LIKE "
-                        : " = ";
+                    // Text type = LIKE
+                    if (field.DataType.Equals("Text", StringComparison.OrdinalIgnoreCase) ||
+                        field.DataType.Equals("String", StringComparison.OrdinalIgnoreCase))
+                    {
+                        where.Append(" LIKE ");
+                    }
+                    else
+                    {
+                        where.Append(" = ");
+                    }
                 }
 
-                // param
-                string param = item.Key;
+                // --------------------------
+                // Prepare value and parameter
+                // --------------------------
+                string param = $"@{rawKey}";
 
-                if (field.DataType.ToLower() == "checkbox")
-                    userValue = (userValue == "true") ? "1" : "0";
+                // Checkbox → convert true/false to 1/0
+                if (field.DataType.Equals("CheckBox", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = (value == "true") ? "1" : "0";
+                }
 
+                // Decimal and Number → convert to decimal
+                else if (field.DataType.Equals("Decimal", StringComparison.OrdinalIgnoreCase) ||
+                         field.DataType.Equals("Number", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (decimal.TryParse(value, out decimal dec))
+                        value = dec.ToString("0.##"); // for parameter only, select still formats N2
+                }
+
+                // LookUp → ID compare (same as old behavior)
+                else if (field.DataType.Equals("LookUp", StringComparison.OrdinalIgnoreCase))
+                {
+                    // value remains ID (lookup text not searchable)
+                }
+
+                // DateTo → append 23:59:59
                 if (dateSide == "To")
-                    userValue += " 23:59:59";
+                {
+                    value += " 23:59:59";
+                }
 
-                cmd.Parameters.AddWithValue(param,
-                    field.DataType.ToLower() == "text"
-                        ? $"%{userValue}%"
-                        : userValue);
+                // --------------------------
+                // Add SQL parameter
+                // --------------------------
+                if (field.DataType.Equals("Text", StringComparison.OrdinalIgnoreCase) ||
+                    field.DataType.Equals("String", StringComparison.OrdinalIgnoreCase))
+                {
+                    cmd.Parameters.AddWithValue(param, $"%{value}%");
+                }
+                else
+                {
+                    cmd.Parameters.AddWithValue(param, value);
+                }
+
+                where.Append(param);
             }
 
-            return result;
+            return where.ToString();
         }
+
 
         // ----------------------------------------------
         // BUILD FINAL QUERY (fast)
         // ----------------------------------------------
-        public void BuildLoadDataQuery(
-            Component component,
-            LoadViewListItemDto view,
-            Dictionary<string, string> search,
-            Users user,
-            SqlCommand cmd,
-            out string query,
-            out string queryCount)
+        public void BuildLoadDataQuery(Component component, LoadViewListItemDto view, Dictionary<string, string> search, bool hasSearch, Users user, SqlCommand cmd, out string query, out string queryCount)
         {
             string connectionString = _commonServices.getConnectionString();
 
@@ -966,12 +958,80 @@ namespace DomainServices.Services
             var sbSelect = new StringBuilder();
             foreach (var f in fields.Where(f => f.DisplayInList))
             {
+                string alias = f.FieldName;
                 string col =
                     (f.IsCalc && !string.IsNullOrEmpty(f.CalcExpression))
-                    ? "(" + ReplaceCalcDefaults(f.CalcExpression, user) + ")"
-                    : $"{f.TableName}.{f.TableColumn}";
+                        ? "(" + ReplaceCalcDefaults(f.CalcExpression, user) + ")"
+                        : $"{f.TableName}.{f.TableColumn}";
 
-                sbSelect.Append($"{col} {f.FieldName},");
+                if (f.DataType.Equals("LookUp", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(f.LookUp)
+                    && f.LookUp != "-1")
+                {
+                    var lookupSql =
+                        $"SELECT dbo.GetLookUpVal({f.LookUp}, '{user.Language}')";
+
+                    var lookupExpression =
+                        _commonServices.ExecuteQuery_OneValue(lookupSql, null, connectionString);
+
+                    col = $"({lookupExpression}{col})";
+                }
+
+                else if (f.DataType.Equals("Date", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"CONVERT(VARCHAR, {col}, 103)";
+                }
+                else if (f.DataType.Equals("DateTime", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"FORMAT({col}, 'dd/MM/yyyy hh:mm tt')";
+                }
+                else if (f.DataType.Equals("Time", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"FORMAT({col}, 'hh:mm tt')";
+                }
+
+                else if (f.DataType.Equals("CheckBox", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"{col}";
+                    alias = $"check_{f.FieldName}";
+                }
+
+                else if (f.DataType.Equals("Number", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"{col}";
+                }
+
+                else if (f.DataType.Equals("Decimal", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"FORMAT({col}, 'N3')";
+                    alias = $"decimal_{f.FieldName}";
+                }
+
+                else if (f.DataType.Equals("Color", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"{col}";
+                    alias = $"color_{f.FieldName}";
+                }
+
+                else if (f.DataType.Equals("Button", StringComparison.OrdinalIgnoreCase) ||
+                         f.DataType.Equals("InnerButton", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"{col}";
+                    alias = $"button_{f.FieldName}";
+                }
+
+                else if (f.DataType.Equals("File", StringComparison.OrdinalIgnoreCase))
+                {
+                    col = $"{col}";
+                    alias = $"file_{f.FieldName}";
+                }
+
+                else
+                {
+                    col = $"{col}";
+                }
+
+                sbSelect.Append($"{col} {EscapeAlias(alias)},");
             }
             foreach (var f in fields)
             {
@@ -985,7 +1045,6 @@ namespace DomainServices.Services
                     {
                         view.CompFieldName = $"{f.TableName}.{f.TableColumn}";
                     }
-                    break;
                 }
 
             }
@@ -998,9 +1057,13 @@ namespace DomainServices.Services
                 2 => $" GroupId IN (SELECT ID FROM dbo.GetUserGroups('{user.Id}')) ",
                 _ => $" CreatedBy = '{user.Id}' "
             };
-
+            string whereSearch = "";
             // ---- search conditions
-            string whereSearch = BuildSearchConditions(search, fields, cmd);
+            if (hasSearch)
+            {
+                whereSearch = BuildSearchConditions(search, fields, cmd);
+            }
+            
 
             // ---- final WHERE
             string whereFinal =_commonServices.GetQueryWhere(
@@ -1025,8 +1088,122 @@ namespace DomainServices.Services
             queryCount =
                 $"SELECT COUNT(1) FROM {component.TableName} {whereFinal}";
         }
-        #endregion
+        private static string EscapeAlias(string alias)
+        {
+            // any SQL keyword you want to protect
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Print", "Order", "Group", "User", "Key", "Type", "Index",
+                "Table", "Select", "From", "To", "By", "In"
+            };
 
+            return reserved.Contains(alias) ? $"[{alias}]" : alias;
+        }
+        #endregion
+        #region Export Excel Helper
+        public void BuildExportExcelQuery(Component component, LoadViewListItemDto view, Users user, SqlCommand cmd, out string query)
+        {
+            string connectionString = _commonServices.getConnectionString();
+
+            string sql = @"
+            SELECT 
+                Name, TableName, ColumnName, DataType,
+                DisplayInList, IsCalc, CalcExpr, LookUp
+            FROM ComponentField
+            WHERE ComponentId = (SELECT Id FROM Component WHERE Name = @Name)
+            ORDER BY DisplaySequence";
+
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("@Name", component.Name);
+
+            var rows = ExecuteListDictionary(sql, cmd, connectionString);
+
+            var fields = rows.Select(r => new ComponentDetail
+            {
+                FieldName = r["Name"]?.ToString() ?? "",
+                TableName = (r["TableName"]?.ToString() ?? "").ToLower() == "transactions"
+                            ? component.TableName
+                            : r["TableName"]?.ToString(),
+                TableColumn = r["ColumnName"]?.ToString() ?? "",
+                DataType = r["DataType"]?.ToString() ?? "",
+                DisplayInList = Convert.ToBoolean(r["DisplayInList"]),
+                IsCalc = Convert.ToBoolean(r["IsCalc"]),
+                CalcExpression = r["CalcExpr"]?.ToString() ?? "",
+                LookUp = r["LookUp"]?.ToString() ?? "-1"
+            }).ToList();
+
+            var sb = new StringBuilder();
+
+            foreach (var f in fields.Where(f => f.DisplayInList))
+            {
+                string col =
+                    (f.IsCalc && !string.IsNullOrEmpty(f.CalcExpression))
+                        ? "(" + ReplaceCalcDefaults(f.CalcExpression, user) + ")"
+                        : $"{f.TableName}.{f.TableColumn}";
+
+                string alias = f.FieldName;
+
+                // LOOKUP → text
+                if (f.DataType.Equals("LookUp", StringComparison.OrdinalIgnoreCase)
+                    && f.LookUp != "-1")
+                {
+                    string lookupSql =
+                        $"SELECT dbo.GetLookUpVal({f.LookUp}, '{user.Language}')";
+
+                    string lookupExpr = _commonServices.ExecuteQuery_OneValue(lookupSql, null, connectionString);
+                    col = $"({lookupExpr}{col})";
+                }
+
+                // DATE
+                if (f.DataType.Equals("Date", StringComparison.OrdinalIgnoreCase))
+                    col = $"CONVERT(VARCHAR, {col}, 103)";
+
+                // DATETIME
+                else if (f.DataType.Equals("DateTime", StringComparison.OrdinalIgnoreCase))
+                    col = $"FORMAT({col}, 'dd/MM/yyyy hh:mm tt')";
+
+                // TIME
+                else if (f.DataType.Equals("Time", StringComparison.OrdinalIgnoreCase))
+                    col = $"FORMAT({col}, 'hh:mm tt')";
+
+                // DECIMAL
+                else if (f.DataType.Equals("Decimal", StringComparison.OrdinalIgnoreCase) )
+                {
+                    col = $"REPLACE(FORMAT({col}, 'N3'), ',', '')";
+                }
+
+                // COLOR
+                else if (f.DataType.Equals("Color", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                // BUTTON
+                else if (f.DataType.Equals("Button", StringComparison.OrdinalIgnoreCase) ||
+                         f.DataType.Equals("InnerButton", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                // FILE
+                else if (f.DataType.Equals("File", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                sb.Append($"{col} [{alias}],");
+            }
+
+            string cols = sb.ToString().TrimEnd(',');
+
+            string where = _commonServices.GetQueryWhere(
+                view.CompFieldName,
+                "",
+                "",
+                component.SearchSpec,
+                user
+            );
+
+            query =
+                $"SELECT {cols} FROM {component.TableName} " +
+                $"{where} ORDER BY {component.TableName}.{component.SortSpec}";
+        }
+
+        #endregion
         #endregion
     }
 }

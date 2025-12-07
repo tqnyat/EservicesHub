@@ -3,11 +3,13 @@ using DomainServices.Data.Repository;
 using DomainServices.Models;
 using DomainServices.Models.Core;
 using DomainServices.Services.Interfaces;
+using EservicesHub.Models.Core;
 using Ganss.Xss;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Newtonsoft.Json;
 using Quartz.Util;
 using System.Data;
@@ -15,6 +17,7 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Component = DomainServices.Models.Component;
 
 
@@ -45,23 +48,6 @@ namespace DomainServices.Services
             _signInManager = signInManager;
         }
         #region Methods
-
-        public Dictionary<string, object> IsAuthenticated(ClaimsPrincipal currentUser)
-        {
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-
-            var user = _userManager.GetUserAsync(currentUser).Result;
-
-            string queryString = "SELECT FirstName + ' ' + LastName AS FULL_NAME, NULL AS PROFILE_IMAGE, 'Client' USER_TYPE, (SELECT NAME FROM Groups WHERE ID = UserGroupId) AS CompanyName FROM [dbo].AspNetUsers U WHERE U.Id = @UserId";
-            SqlCommand cmd = new SqlCommand();
-            cmd.Parameters.AddWithValue("@UserId", user.Id);
-            DataTable dt = _commonServices.getDataTableFromQuery(queryString, cmd, _commonServices.getConnectionString(), CommandType.Text);
-
-            return new Dictionary<string, object> { { "UserInfo", dt }, { "UserName", user.UserName } };
-        }
 
         public async Task<GetUserViewsResponse> IGetUserViewsAsync(ClaimsPrincipal currentUser)
         {
@@ -529,7 +515,27 @@ namespace DomainServices.Services
             // ----------------------------------------------------------
             // 8) EXECUTE SQL
             // ----------------------------------------------------------
-            _coreData.ExecuteSubmitSql(sql, cmd, component, user, saveType, ref rowId);
+            try
+            {
+                _coreData.ExecuteSubmitSql(sql, cmd, component, user, saveType, ref rowId);
+            }
+            catch (SqlException ex)
+            {
+                if (ex.Number == 2627 || ex.Number == 2601)
+                {
+                    // 2627 = Violation of PRIMARY KEY or UNIQUE constraint
+                    // 2601 = Cannot insert duplicate value in index
+                    return new SubmitDataResultDto
+                    {
+                        ExceptionError = "A record with the same values already exists.",
+                        SaveType = saveType,
+                        RowId = selectedId,
+                        UpdatedSession = new Dictionary<string, object>()
+                    };
+                }
+
+                throw; // rethrow all other errors
+            }
 
             // ----------------------------------------------------------
             // 9) UPDATE FIELDS CACHE (equivalent to old session.SetString)
@@ -632,7 +638,7 @@ namespace DomainServices.Services
             if (rebuildQuery)
             {
                 // Build complete SELECT + COUNT queries based on ComponentField metadata
-                _coreData.BuildLoadDataQuery(component: component, view: view, search: search, user: user, cmd: cmd, query: out queryText, queryCount: out queryCount);
+                _coreData.BuildLoadDataQuery(component: component, view: view, search: search, hasSearch : hasSearch, user: user, cmd: cmd, query: out queryText, queryCount: out queryCount);
 
                 // Cache the base command snapshot before paging parameters are added
                 var cmdBytes = _commonServices.ConvertSqlCommandToByte(cmd);
@@ -911,323 +917,358 @@ namespace DomainServices.Services
             };
         }
 
-
-        public object IDeleteRowData(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
+        public async Task<DeleteRowResultDto> IDeleteRowData(DeleteRowRequest t, ClaimsPrincipal currentUser)
         {
-            var componentName = t["componentName"].ToString();
-            var selectedId = t["selectedId"].ToString();
-            string queryText = "";
-            string deleteQueryText = "";
-            var tableName = "";
-            var delProc = "";
-            var connectionString = "";
-            int effectedRows = 0;
+            // -------------------------------------------------
+            // 1. Validate
+            // -------------------------------------------------
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            DataTable dataTable = new DataTable();
+            string componentName = t.ComponentName ?? "";
+            string selectedId = t.SelectedId ?? "-1";
+
+            var username = currentUser.FindFirst("username")?.Value;
+            var user = await _userManager.FindByNameAsync(username);
+
+            // -------------------------------------------------
+            // 2. Load component from CoreDataView (DataShape)
+            // -------------------------------------------------
+            var shape = JsonConvert.DeserializeObject<DataShape>(t.CoreDataView ?? "[]")
+                        ?? new DataShape();
+
+            var viewList = CoreDataShapeMapper.FromShape(shape);
+            var view = viewList.FirstOrDefault(v => v.CompName == componentName);
+
+            if (view == null)
+                throw new Exception($"Component '{componentName}' not found.");
+
+            if (view.NoDelete)
+            {
+                return new DeleteRowResultDto
+                {
+                    ExceptionError = "لا تملك صلاحية حذف السجل"
+                };
+            }
+
+            var component = view.Component;
+            string tableName = component.TableName;
+            string delProc = component.OnDeleteProc ?? "";
+
+            // -------------------------------------------------
+            // 3. Prepare SQL
+            // -------------------------------------------------
             SqlCommand cmd = new SqlCommand();
-
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-
-            var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-            DataRow[] dataRow = coreDataView.Select("CompName = '" + componentName + "'");
-            Component component = JsonConvert.DeserializeObject<Component>(dataRow[0]["Component"].ToString());
-
-            if (dataRow[0]["NoDelete"] != null && dataRow[0]["NoDelete"].ToString() == "1")
-            {
-                return new Dictionary<string, object> { { "ExceptionError", "لا تملك صلاحية حذف السجل" } };
-            }
-
-            tableName = component.TableName;
-            delProc = component.OnDeleteProc;
-
-            queryText = (delProc == "" || delProc.ToLower() == "null") ? "" : delProc + " @SelectedId ";
-            queryText += (delProc.ToLower().Contains("usersdeleterole")) ? " ,@DeletedByUserId;" : ";";
-            deleteQueryText = "Delete From " + tableName + " Where Id = @SelectedId; ";
-            var user = _userManager.GetUserAsync(currentUser).Result;
-            cmd.Parameters.Clear();
             cmd.Parameters.AddWithValue("@SelectedId", selectedId);
             cmd.Parameters.AddWithValue("@DeletedByUserId", user.Id);
 
-            if (componentName.Substring(0, 3) == "Sys")
-            {
-                connectionString = _commonServices.getConnectionString();
-            }
-            else
-            {
-                connectionString = _commonServices.getConnectionString();
-            }
+            string deleteSql = $"DELETE FROM {tableName} WHERE Id = @SelectedId;";
 
-            if (queryText != "")
+            string procSql = "";
+            if (!string.IsNullOrWhiteSpace(delProc) && delProc.ToLower() != "null")
             {
-                effectedRows = _commonServices.excuteQueryWithoutTrans(queryText, cmd, connectionString, CommandType.Text);
+                procSql = $"{delProc} @SelectedId";
+                if (delProc.ToLower().Contains("usersdeleterole"))
+                    procSql += " ,@DeletedByUserId;";
+                else
+                    procSql += ";";
             }
 
-            effectedRows = _commonServices.excuteQueryWithoutTrans(deleteQueryText, cmd, connectionString, CommandType.Text);
+            string connectionString = _commonServices.getConnectionString();
 
-            return new Dictionary<string, object> { { "EffectedRows", effectedRows } };
-        }
+            // -------------------------------------------------
+            // 4. Execute (wrapped safe)
+            // -------------------------------------------------
+            int affected;
 
-        public object IGetFile(Dictionary<string, string> t, ClaimsPrincipal currentUser, ISession session)
-        {
-            string componentName = t["componentName"].ToString();
-            string fieldName = t["fieldName"].ToString();
-            string selectedId = t["selectedId"].ToString();
-
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-
-            string queryText = "";
-            SqlCommand cmd = new SqlCommand();
-
-            cmd.Parameters.AddWithValue("@ComponentName", componentName);
-            cmd.Parameters.AddWithValue("@FieldName", fieldName);
-            cmd.Parameters.AddWithValue("@RowId", selectedId);
-
-            queryText = "GetFile";
-            DataTable dt = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString(), CommandType.StoredProcedure);
-            if (dt.Rows.Count == 1)
-            {
-                byte[] fieldData = (Byte[])dt.Rows[0]["FileData"];
-                string fileBase64 = Convert.ToBase64String(fieldData);
-                string fileName = dt.Rows[0]["FileName"].ToString();
-
-                return new Dictionary<string, object> { { "FileName", fileName }, { "FileBase64", fileBase64 } };
-            }
-
-            return new Dictionary<string, object> { { "ExceptionError", "الملف غير موجود" } };
-        }
-
-        //public DataTable IExportExcel(string componentName, ISession session)
-        //{
-        //    string queryText = "";
-        //    SqlCommand cmd = new SqlCommand();
-
-        //    // Get the stored CoreDataView from session
-        //    var coreDataView = _commonServices.ByteArrayToDataTable(session.Get("CoreDataView"));
-        //    DataRow[] dataRow = coreDataView.Select("CompName = '" + componentName + "'");
-
-        //    cmd = _commonServices.GetSqlCommanFromByte(dataRow[0]["QueryStringCmd"] as byte[]);
-        //    queryText = dataRow[0]["QueryString"].ToString();
-
-        //    // ✅ Ensure CommandText is set
-        //    cmd.CommandText = queryText;
-
-        //    cmd.Parameters.AddWithValue("@PageNumber", 1);
-        //    cmd.Parameters.AddWithValue("@PageSize", 1000000);
-
-        //    DataTable dt = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
-
-        //    // Remove specific rows for CompanyUsers
-        //    if (componentName == "CompanyUsers")
-        //    {
-        //        var rowsToRemove = dt.AsEnumerable()
-        //                             .Where(row => row["Idno"].ToString() == "1233441000")
-        //                             .ToList();
-
-        //        foreach (var row in rowsToRemove)
-        //        {
-        //            dt.Rows.Remove(row);
-        //        }
-        //    }
-
-        //    // Fix table headers (rename columns)
-        //    var fields = _coreData.GetComponentFields(componentName);
-
-        //    for (int i = 0; i < fields.Rows.Count; i++)
-        //    {
-        //        string oldColumnName = fields.Rows[i].ItemArray[11].ToString(); // current column name in dt
-        //        string newColumnName = fields.Rows[i].ItemArray[13].ToString(); // desired display name
-
-        //        // Skip "TransNo" entirely
-        //        if (oldColumnName == "TransNo")
-        //            continue;
-
-        //        // Ensure the column exists and the new name is not a duplicate
-        //        if (dt.Columns.Contains(oldColumnName) && !dt.Columns.Contains(newColumnName))
-        //        {
-        //            dt.Columns[oldColumnName].ColumnName = newColumnName;
-        //        }
-        //    }
-
-        //    // 🚨 Remove the TransNo column completely if it still exists
-        //    if (dt.Columns.Contains("TransNo"))
-        //    {
-        //        dt.Columns.Remove("TransNo");
-        //    }
-
-        //    return dt;
-        //}
-
-
-        public object ISetApplicationTheme(Dictionary<string, string> t, ClaimsPrincipal currentUser)
-        {
-            string queryText = "";
-            string applicationTheme = t["applicationTheme"].ToString(); ;
-
-            DataTable dataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
-
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-            {
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-            }
-            var user = _userManager.GetUserAsync(currentUser).Result;
-
-            queryText = "UPDATE USERS SET ApplicationTheme = @ApplicationTheme Where Id = @UserId";
-            cmd.Parameters.AddWithValue("@UserId", user.Id);
-            cmd.Parameters.AddWithValue("@ApplicationTheme", applicationTheme);
-
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
-
-            return new Dictionary<string, object> { { "ListDetial", dataTable } };
-        }
-
-        public Dictionary<string, object> IGetSystemLookUp(Dictionary<string, string> t)
-        {
-            string lookUpName = t["lookUpName"].ToString();
-            string queryText = "";
-            DataTable dataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
-            var currentLanguage = t.TryGetValue("langId", out var langId) ? langId : Thread.CurrentThread.CurrentCulture.Name;
-            cmd.Parameters.AddWithValue("@LookUpName", lookUpName);
-            cmd.Parameters.AddWithValue("@LangName", currentLanguage);
-            queryText = "GetSystemLookUp";
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString(), CommandType.StoredProcedure);
-
-            return new Dictionary<string, object> { { "Status", "Success" }, { "DataList", dataTable } };
-        }
-
-        public string IGetSystemLookUpTransactionName(int code, string lang)
-        {
-            string dataTable = "";
-            SqlCommand cmd = new SqlCommand();
-
-            // Add parameter to the command
-            cmd.Parameters.AddWithValue("@code", code);
-
-            // Determine which column to select based on the language
-            string columnName = lang == "ar" ? "NameAr" : "Name";
-
-            // SQL query with dynamic column selection
-            string queryText = $@"
-        SELECT {columnName}
-        FROM LookUpDetail
-        WHERE LookUpId = 50 AND Code = @code";
-
-            dataTable = _commonServices.ExecuteQuery_OneValue(queryText, cmd, _commonServices.getConnectionString(), CommandType.Text);
-
-            return dataTable;
-        }
-
-        public string IGetSystemLookUpTransactionStatus(int code, string lang)
-        {
-            string dataTable = "";
-            SqlCommand cmd = new SqlCommand();
-
-            // Add parameter to the command
-            cmd.Parameters.AddWithValue("@code", code);
-
-            // Determine which column to select based on the language
-            string columnName = lang == "ar" ? "NameAr" : "Name";
-
-            // SQL query with dynamic column selection
-            string queryText = $@"
-        SELECT {columnName}
-        FROM LookUpDetail
-        WHERE LookUpId = 51 AND Code = @code";
-
-            dataTable = _commonServices.ExecuteQuery_OneValue(queryText, cmd, _commonServices.getConnectionString(), CommandType.Text);
-
-            return dataTable;
-        }
-
-        public List<SelectListItem> GetLookupList(string lookupName, string langId = "", string cascadeValue = "", bool addSelectFromList = true)
-        {
-
-            string queryText = "";
-            DataTable dataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
-            var currentLanguage = !String.IsNullOrEmpty(langId) ? langId : Thread.CurrentThread.CurrentCulture.Name;
-            cmd.Parameters.AddWithValue("@LookUpName", lookupName);
-            cmd.Parameters.AddWithValue("@LangName", currentLanguage);
-            queryText = "GetSystemLookUp";
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString(), CommandType.StoredProcedure);
-
-            var lookupList = new List<SelectListItem>();
-            var lookup = new SelectListItem();
-            lookup.Text = _localResourceService.GetResource("System.Lookup.ChooseFromList");
-            lookup.Value = "";
-            lookupList.Add(lookup);
-            foreach (DataRow row in dataTable.Rows)
-            {
-                lookup = new SelectListItem();
-                lookup.Value = row["Code"].ToString();
-                lookup.Text = row["Name"].ToString();
-                lookupList.Add(lookup);
-            }
-
-            return lookupList;
-        }
-
-        public string GetLookupValue(string lookupName, string lookupCode, string langId = "", bool GetNote = false)
-        {
             try
             {
-                string queryText = "";
-                DataTable dataTable = new DataTable();
-                SqlCommand cmd = new SqlCommand();
-                var currentLanguage = !String.IsNullOrEmpty(langId) ? langId : Thread.CurrentThread.CurrentCulture.Name;
-                cmd.Parameters.AddWithValue("@LookUpName", lookupName);
-                cmd.Parameters.AddWithValue("@Code", lookupCode);
-                cmd.Parameters.AddWithValue("@LangId", currentLanguage.ToLower());
-                cmd.Parameters.AddWithValue("@GetNote", GetNote ? 1 : 0);
-                queryText = "select DBO.GetLookUpValue (@LookUpName, @Code, @LangId, @GetNote)";
-                var val = _commonServices.ExecuteQuery_OneValue(queryText, cmd, _commonServices.getConnectionString(), CommandType.Text);
-                return val;
+                // Execute delete stored procedure (if exists)
+                if (!string.IsNullOrWhiteSpace(procSql))
+                    _commonServices.ExecuteNonQuerySafe(procSql, cmd, connectionString);
 
+                // Execute physical delete
+                affected = _commonServices.ExecuteNonQuerySafe(deleteSql, cmd, connectionString);
             }
-            catch (Exception err)
+            catch (SqlException ex)
             {
-                return _commonServices.getExceptionErrorMessage(err);
+                // Handle FK constraint violation
+                if (ex.Number == 547)
+                {
+                    return new DeleteRowResultDto
+                    {
+                        ExceptionError = "لا يمكن حذف السجل لوجود بيانات مرتبطة."
+                    };
+                }
+
+                // Handle other SQL issues
+                return new DeleteRowResultDto
+                {
+                    ExceptionError = ex.Message
+                };
             }
+
+            // -------------------------------------------------
+            // 5. Return success
+            // -------------------------------------------------
+            return new DeleteRowResultDto
+            {
+                EffectedRows = affected
+            };
         }
 
-        public object IGetTopicPublished()
+        public async Task<IGetFileResultDto> IGetFile(IGetFileRequest t)
         {
-            string queryText = "";
-            DataTable dataTable = new DataTable();
-            SqlCommand cmd = new SqlCommand();
+            string componentName = t.ComponentName ?? "";
+            string fieldName = t.FieldName ?? "";
+            int rowId = int.TryParse(t.SelectedId, out var parsed) ? parsed : 0;
 
-            queryText = "SELECT TopicName FROM Topics WHERE Published = 1";
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString());
+            using var cmd = new SqlCommand("dbo.GetFile");
 
-            return new Dictionary<string, object> { { "Status", "Success" }, { "DataList", dataTable } };
+            cmd.Parameters.Add("@ComponentName", SqlDbType.NVarChar, 50).Value = componentName;
+            cmd.Parameters.Add("@FieldName", SqlDbType.NVarChar, 50).Value = fieldName;
+            cmd.Parameters.Add("@RowId", SqlDbType.Int).Value = rowId;
+
+            string connStr = _commonServices.getConnectionString();
+
+            // IMPORTANT: This must call stored procedures correctly
+            DataShape shape = _commonServices.ExecuteQuery_DataShape("", cmd, connStr, CommandType.StoredProcedure);
+
+            if (shape.Rows.Count == 0)
+            {
+                return new IGetFileResultDto { ExceptionError = "الملف غير موجود" };
+            }
+
+            var row = shape.Rows[0];
+
+            if (!row.ContainsKey("FileData") || row["FileData"] == null)
+            {
+                return new IGetFileResultDto { ExceptionError = "الملف غير موجود" };
+            }
+
+            byte[] data = (byte[])row["FileData"];
+            string base64 = Convert.ToBase64String(data);
+            string fileName = row.ContainsKey("FileName") ? row["FileName"]?.ToString() ?? "" : "";
+
+            return new IGetFileResultDto
+            {
+                FileName = fileName,
+                FileBase64 = base64
+            };
         }
 
-        public object IGetTopicDetial(Dictionary<string, string> t, string LangId = "")
+
+        public async Task<DataShape> IExportExcel(ExportExcelRequest data, ClaimsPrincipal currentUser)
         {
-            string topicName = t["topicName"].ToString();
-            var currentLanguage = String.IsNullOrEmpty(LangId) ? Thread.CurrentThread.CurrentCulture.Name : (LangId.ToLower().Contains("en") ? "english" : "arabic");
-            string queryText = "";
-            DataTable dataTable = new DataTable();
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
+
+            var username = currentUser.FindFirst("username")?.Value;
+            var user = await _userManager.FindByNameAsync(username);
+
+            //------------------------------------------------------------
+            // 1) Decode CoreDataView
+            //------------------------------------------------------------
+            var shape = JsonConvert.DeserializeObject<DataShape>(data.CoreDataView ?? "{}")
+                        ?? new DataShape();
+
+            var viewList = CoreDataShapeMapper.FromShape(shape);
+
+            var viewItem = viewList.FirstOrDefault(x => x.CompName == data.ComponentName);
+            if (viewItem == null)
+                return new DataShape();
+
+            var component = viewItem.Component;
+
+            //------------------------------------------------------------
+            // 2) Build Excel SELECT (FULL FIELDS)
+            //------------------------------------------------------------
             SqlCommand cmd = new SqlCommand();
 
+            _coreData.BuildExportExcelQuery(
+                component,
+                viewItem,
+                user,
+                cmd,
+                out string exportQuery
+            );
+
+            cmd.CommandText = exportQuery;
+            cmd.Parameters.AddWithValue("@LangId", user.Language);
+
+            //------------------------------------------------------------
+            // 3) Load Fields for localized headers
+            //------------------------------------------------------------
+            var fields = await _coreData.GetComponentFields(data.ComponentName);
+
+            // Build mapping: FieldName → LocalizedLabel
+            var headerMap = fields
+                .GroupBy(f => f.Name)
+                .ToDictionary(
+                    g => g.Key,
+                    g => string.IsNullOrWhiteSpace(g.First().Lable)
+                            ? g.First().Name
+                            : g.First().Lable
+                );
+
+            //------------------------------------------------------------
+            // 4) Execute SQL → DataShape
+            //------------------------------------------------------------
+            DataShape ds = new DataShape();
+
+            using (var conn = new SqlConnection(_commonServices.getConnectionString()))
+            {
+                cmd.Connection = conn;
+                await conn.OpenAsync();
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    if (!reader.HasRows)
+                        return ds;
+
+                    //----------------------------------------------------
+                    // Columns
+                    //----------------------------------------------------
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        string originalName = reader.GetName(i);
+
+                        string displayName = headerMap.ContainsKey(originalName)
+                            ? headerMap[originalName]
+                            : originalName;
+
+                        ds.Columns.Add(new ColumnShape
+                        {
+                            Name = displayName,
+                            DataType = reader.GetFieldType(i).Name,
+                            ReadOnly = false,
+                            Required = false
+                        });
+                    }
+
+                    //----------------------------------------------------
+                    // Rows
+                    //----------------------------------------------------
+                    while (await reader.ReadAsync())
+                    {
+                        var row = new Dictionary<string, object>();
+
+                        for (int i = 0; i < reader.FieldCount; i++)
+                        {
+                            string originalName = reader.GetName(i);
+
+                            string displayName = headerMap.ContainsKey(originalName)
+                                ? headerMap[originalName]
+                                : originalName;
+
+                            object val = reader.IsDBNull(i) ? "" : reader.GetValue(i);
+
+                            row[displayName] = val;
+                        }
+
+                        ds.Rows.Add(row);
+                    }
+                }
+            }
+
+            return ds;
+        }
+
+        public async Task<ApplicationThemeResponse> ISetApplicationTheme(ApplicationThemeRequest t, ClaimsPrincipal currentUser)
+        {
+            if (currentUser?.Identity?.IsAuthenticated != true)
+                _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
+
+            var user = await _userManager.GetUserAsync(currentUser);
+
+            string theme = t.ApplicationTheme;
+
+            string sql = "UPDATE USERS SET ApplicationTheme = @ApplicationTheme WHERE Id = @UserId";
+            var cmd = new SqlCommand(sql);
+
+            cmd.Parameters.AddWithValue("@UserId", user.Id);
+            cmd.Parameters.AddWithValue("@ApplicationTheme", theme);
+
+            var listDetial = _commonServices.ExecuteListDictionary(sql, cmd, _commonServices.getConnectionString());
+
+            return new ApplicationThemeResponse
+            {
+                ListDetial = listDetial
+            };
+        }
+
+        public async Task<Dictionary<string, object>> IGetSystemLookUp(Dictionary<string, string> t)
+        {
+            string lookUpName = t["lookUpName"];
+
+            SqlCommand cmd = new SqlCommand();
+            var currentLanguage = t.TryGetValue("langId", out var langId)
+                ? langId
+                : Thread.CurrentThread.CurrentCulture.Name;
+
+            cmd.Parameters.AddWithValue("@LookUpName", lookUpName);
+            cmd.Parameters.AddWithValue("@LangName", currentLanguage);
+
+            string queryText = "GetSystemLookUp";
+
+            DataShape lookupList = _commonServices.ExecuteQuery_DataShape(
+                queryText,
+                cmd,
+                _commonServices.getConnectionString(),
+                CommandType.StoredProcedure
+            );
+
+            return new Dictionary<string, object>
+            {
+                { "Status", "Success" },
+                { "DataList", lookupList }
+            };
+        }
+
+        public async Task<TopicsPublishedResponse> IGetTopicPublished()
+        {
+            string query = "SELECT TopicName FROM Topics WHERE Published = 1";
+
+            var dataList = _commonServices.ExecuteListDictionary(query, new SqlCommand(), _commonServices.getConnectionString());
+
+            return new TopicsPublishedResponse
+            {
+                Status = "Success",
+                DataList = dataList
+            };
+        }
+
+        public async Task<object> IGetTopicDetial(TopicDetailRequest t, string LangId = "")
+        {
+            string topicName = t.TopicName;
+
+            var currentLanguage = string.IsNullOrEmpty(LangId)
+                ? Thread.CurrentThread.CurrentCulture.Name
+                : (LangId.ToLower().Contains("en") ? "english" : "arabic");
+
+            SqlCommand cmd = new SqlCommand();
             cmd.Parameters.AddWithValue("@TopicName", topicName);
             cmd.Parameters.AddWithValue("@LangName", currentLanguage);
-            queryText = "GetTopicBody";
-            dataTable = _commonServices.getDataTableFromQuery(queryText, cmd, _commonServices.getConnectionString(), CommandType.StoredProcedure);
 
-            return new Dictionary<string, object> { { "Status", "Success" }, { "DataList", dataTable } };
+            string queryText = "GetTopicBody";
+
+            // Execute stored procedure and return DataShape
+            DataShape dataShape = _commonServices.ExecuteQuery_DataShape(
+                queryText,
+                cmd,
+                _commonServices.getConnectionString()
+            );
+
+            return new
+            {
+                Status = "Success",
+                DataList = dataShape
+            };
         }
 
-        public IActionResult IGenerateAndSendUser([FromHeader] string userId)
+        public async Task<IActionResult> IGenerateAndSendUser(GenerateAndSendUserRequest data)
         {
-            var user = _userManager.FindByIdAsync(userId).Result;
+            var user = await _userManager.FindByIdAsync(data.UserId);
 
             if (user == null)
             {
@@ -1318,7 +1359,7 @@ namespace DomainServices.Services
                         ReadStatus = false,
                         Status = ((int)PublicEnums.NotificationStatus.New).ToString(),
                         AssignToCompany = user.UserGroupId.ToString(),
-                        AssignToUser = userId,
+                        AssignToUser = user.Id,
                         Mobile = true,
                         Web = true,
                         Email = false,
@@ -1343,7 +1384,7 @@ namespace DomainServices.Services
                     ReadStatus = false,
                     Status = ((int)PublicEnums.NotificationStatus.New).ToString(),
                     AssignToCompany = user.UserGroupId.ToString(),
-                    AssignToUser = userId,
+                    AssignToUser = user.Id,
                     Mobile = false,
                     Web = false,
                     Email = true,
@@ -1372,18 +1413,6 @@ namespace DomainServices.Services
                 // Log errors
                 return StatusCode(500, new { Status = "Failed", Message = $"Password reset failed: {errors}" });
             }
-        }
-
-        public string IGetSettingValue(string code)
-        {
-            return _commonServices.IGetSettingValue(code);
-        }
-
-        public string GetFileBase64(string TableName, string FileColumn, int Id)
-        {
-            var queryText = $"Select CAST('' AS XML).value('xs:base64Binary(sql:column(\"{FileColumn}\"))', 'VARCHAR(MAX)')  From {TableName} where Id = {Id}";
-            var fileBase64 = _commonServices.ExecuteQuery_OneValue(queryText, null, _commonServices.getConnectionString());
-            return fileBase64;
         }
 
         public bool CheckHtmlContent(string content)
@@ -1452,6 +1481,16 @@ namespace DomainServices.Services
             }
 
             return result;
+        }
+        private string DetectExportDataType(string originalName)
+        {
+            if (originalName.StartsWith("decimal_")) return "Decimal";
+            if (originalName.StartsWith("color_")) return "Color";
+            if (originalName.StartsWith("file_")) return "File";
+            if (originalName.StartsWith("check_")) return "CheckBox";
+            if (originalName.StartsWith("button_")) return "Button";
+
+            return "String";
         }
 
     }

@@ -64,7 +64,7 @@ namespace DomainServices.Services
         #endregion
 
         #region Methods
-        public DataShape ExecuteQuery_DataShape(string query, SqlCommand cmd, string connectionString = null)
+        public DataShape ExecuteQuery_DataShape(string query, SqlCommand cmd, string connectionString = null, CommandType commandType = CommandType.Text)
         {
             if (string.IsNullOrWhiteSpace(connectionString))
                 connectionString = getConnectionString();
@@ -72,24 +72,23 @@ namespace DomainServices.Services
             using var con = new SqlConnection(connectionString);
 
             cmd.Connection = con;
+            cmd.CommandType = commandType;
 
-            // THIS WAS MISSING → your query never executed
-            cmd.CommandText = query;
+            if(!string.IsNullOrEmpty(query))
+                cmd.CommandText = query;
 
             con.Open();
-
             using var reader = cmd.ExecuteReader();
-            var dataShape = new DataShape();
+
+            var shape = new DataShape();
 
             // Build columns
             for (int i = 0; i < reader.FieldCount; i++)
             {
-                dataShape.Columns.Add(new ColumnShape
+                shape.Columns.Add(new ColumnShape
                 {
                     Name = reader.GetName(i),
-                    DataType = reader.GetFieldType(i).Name,
-                    ReadOnly = false,
-                    Required = false
+                    DataType = reader.GetFieldType(i).Name
                 });
             }
 
@@ -99,81 +98,27 @@ namespace DomainServices.Services
                 var row = new Dictionary<string, object>();
 
                 for (int i = 0; i < reader.FieldCount; i++)
-                {
                     row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                }
 
-                dataShape.Rows.Add(row);
+                shape.Rows.Add(row);
             }
 
-            return dataShape;
+            return shape;
         }
 
-        public Dictionary<string, object> ExecuteQuery_Row(string query, SqlCommand cmd, string connectionString = null)
+        public int ExecuteNonQuerySafe(string sql, SqlCommand cmd, string connectionString)
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                connectionString = getConnectionString();
-
             using var con = new SqlConnection(connectionString);
-            cmd.Connection = con;
             con.Open();
 
-            using var reader = cmd.ExecuteReader();
-
-            if (!reader.Read())
-                return new Dictionary<string, object>();
-
-            var row = new Dictionary<string, object>();
-
-            for (int i = 0; i < reader.FieldCount; i++)
-            {
-                row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
-            }
-
-            return row;
-        }
-
-        public object ExecuteQuery_Value(string query, SqlCommand cmd, string connectionString = null)
-        {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                connectionString = getConnectionString();
-
-            using var con = new SqlConnection(connectionString);
             cmd.Connection = con;
-            con.Open();
+            cmd.CommandText = sql;
+            cmd.CommandType = CommandType.Text;
 
-            return cmd.ExecuteScalar();
+            return cmd.ExecuteNonQuery();
         }
 
-        public List<Dictionary<string, object>> ExecuteQuery_List(string query, SqlCommand cmd, string connectionString = null)
-        {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                connectionString = getConnectionString();
-
-            using var con = new SqlConnection(connectionString);
-            cmd.Connection = con;
-            con.Open();
-
-            using var reader = cmd.ExecuteReader();
-            var list = new List<Dictionary<string, object>>();
-
-            while (reader.Read())
-            {
-                var row = new Dictionary<string, object>();
-
-                for (int i = 0; i < reader.FieldCount; i++)
-                {
-                    row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                }
-
-                list.Add(row);
-            }
-
-            return list;
-        }
-
-        public async Task<Dictionary<string, object>> ExecuteSingleRow(
-    string sql, SqlCommand cmd, string connectionString = null)
+        public async Task<Dictionary<string, object>> ExecuteSingleRow(string sql, SqlCommand cmd, string connectionString = null)
         {
             if (cmd == null)
                 cmd = new SqlCommand();
@@ -206,97 +151,6 @@ namespace DomainServices.Services
             return result;
         }
 
-        public async Task<DataShape> GetDataShapeFromQuery(string query, SqlCommand cmd, string connectionString = null, CommandType commandType = CommandType.Text)
-        {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                connectionString = getConnectionString();
-
-            using var con = new SqlConnection(connectionString);
-            using var da = new SqlDataAdapter();
-
-            if (cmd == null)
-                cmd = new SqlCommand();
-
-            cmd.Connection = con;
-            cmd.CommandType = commandType;
-            cmd.CommandText = query;
-
-            da.SelectCommand = cmd;
-
-            var dt = new DataTable();
-            da.Fill(dt);
-
-            // -----------------------------
-            // Convert DataTable → DataShape
-            // -----------------------------
-            var shape = new DataShape();
-
-            // Add columns
-            foreach (DataColumn col in dt.Columns)
-            {
-                shape.Columns.Add(new ColumnShape
-                {
-                    Name = col.ColumnName,
-                    DataType = col.DataType.Name,
-                    ReadOnly = col.ReadOnly,
-                    Required = false
-                });
-            }
-
-            // Add rows
-            foreach (DataRow dr in dt.Rows)
-            {
-                var rowDict = new Dictionary<string, object>();
-
-                foreach (DataColumn col in dt.Columns)
-                {
-                    rowDict[col.ColumnName] =
-                        dr[col] == DBNull.Value ? null : dr[col];
-                }
-
-                shape.Rows.Add(rowDict);
-            }
-
-            return shape;
-        }
-
-        public DataTable getDataTableFromQuery(string query, SqlCommand cmd, string ConnectionString = null, CommandType commandType = CommandType.Text)
-        {
-            if (ConnectionString == "")
-            {
-                ConnectionString = getConnectionString();
-            }
-            SqlConnection con = new SqlConnection();
-            con.ConnectionString = ConnectionString;
-            SqlDataAdapter da = null;
-            try
-            {
-                if (cmd == null)
-                {
-                    cmd = new SqlCommand();
-                }
-
-                cmd.Connection = con;
-                cmd.CommandType = commandType;
-                cmd.CommandText = query;
-
-                da = new SqlDataAdapter(cmd);
-                DataTable dt = new DataTable();
-                da.Fill(dt);
-                return dt;
-            }
-            finally
-            {
-                if (con != null && con.State != ConnectionState.Closed)
-                {
-                    con.Close();
-                    con.Dispose();
-                    da.Dispose();
-                }
-
-            }
-        }
-        
         public string ExecuteQuery_OneValue(string query, SqlCommand cmd, string connectionString)
         {
             SqlConnection con = new SqlConnection();
@@ -347,129 +201,7 @@ namespace DomainServices.Services
                 }
             }
         }
-        
-        public string ExecuteQuery_OneValue(string query, SqlCommand cmd, string connectionString, CommandType commandType)
-        {
-            SqlConnection con = new SqlConnection();
-            SqlTransaction sqlTrans = null;
-
-            if (cmd == null)
-            {
-                cmd = new SqlCommand();
-            }
-            if (connectionString == null)
-            {
-                connectionString = getConnectionString();
-            }
-
-            con.ConnectionString = connectionString;
-
-            //cmd.BindByName = true;
-            try
-            {
-                con.Open();
-                sqlTrans = con.BeginTransaction(IsolationLevel.ReadUncommitted);
-
-                cmd.Connection = con;
-                cmd.Transaction = sqlTrans;
-                cmd.CommandText = query;
-                cmd.CommandType = commandType;
-
-                object c = cmd.ExecuteScalar();
-                sqlTrans.Commit();
-                if (c != null)
-                {
-                    return c.ToString();
-                }
-                return null;
-            }
-            catch (Exception err)
-            {
-                sqlTrans.Rollback();
-                throw;
-            }
-            finally
-            {
-                if (con.State != ConnectionState.Closed)
-                {
-                    con.Close();
-                    con.Dispose();
-                }
-            }
-        }
-        
-        public string ExecuteQuery_OneValue_Trans(string query, ref SqlConnection con, ref SqlTransaction P_sqlTrans, SqlCommand cmd, CommandType commandType = CommandType.Text)
-        {
-            if (cmd == null)
-            {
-                cmd = new SqlCommand();
-            }
-
-            cmd.Connection = con;
-            cmd.Transaction = P_sqlTrans;
-            cmd.CommandType = commandType;
-            cmd.CommandText = query;
-
-            object c = cmd.ExecuteScalar();
-            if (c != null)
-            {
-                return c.ToString();
-            }
-            return null;
-
-        }
-
-        public int excuteQuery_Trans(string query, ref SqlConnection con, ref SqlTransaction P_sqlTrans, SqlCommand cmd, CommandType commandType = CommandType.Text)
-        {
-            if (cmd == null)
-            {
-                cmd = new SqlCommand();
-            }
-
-            cmd.Connection = con;
-            cmd.Transaction = P_sqlTrans;
-            cmd.CommandType = commandType;
-            cmd.CommandText = query;
-            return cmd.ExecuteNonQuery();
-        }
-
-        public int excuteQueryWithoutTrans(string query, SqlCommand cmd, string connectionString = null, CommandType commandType = CommandType.Text)
-        {
-
-            SqlConnection con = null;
-            try
-            {
-                if (cmd == null)
-                {
-                    cmd = new SqlCommand();
-                }
-
-                if (connectionString == null)
-                {
-                    connectionString = getConnectionString();
-                }
-
-                con = new SqlConnection(connectionString);
-                con.Open();
-
-                cmd.Connection = con;
-                cmd.CommandType = commandType;
-                cmd.CommandText = query;
-                int x = cmd.ExecuteNonQuery();
-                return x;
-            }
-            catch (Exception err)
-            {
-
-                throw;
-            }
-            finally
-            {
-                if (con != null && con.State != ConnectionState.Closed)
-                    con.Close();
-            }
-        }
-                
+               
         public string getConnectionString()
         {
             string EncryptionKey = Environment.GetEnvironmentVariable("EncryptionKey");
@@ -642,21 +374,7 @@ namespace DomainServices.Services
             };
         }
 
-        public DataTable ByteArrayToDataTable(byte[] bytes)
-        {
-            try
-            {
-                using var ms = new MemoryStream(bytes);
-                var serializer = new DataContractSerializer(typeof(DataTable));
-                return (DataTable)serializer.ReadObject(ms);
-            }
-            catch (Exception e)
-            {
-                throw e;
-            }
-        }
-
-        public List<Lookup> GetLookupListFormDataTable(DataShape shape)
+        public List<Lookup> GetLookupListFormDataShape(DataShape shape)
         {
             var list = new List<Lookup>();
 
@@ -721,69 +439,6 @@ namespace DomainServices.Services
             return result;
         }
         
-        public async Task<bool> UserSession(Users user, string sessionId, int source, string sessionKey)
-        {
-            var httpContext = _httpContextAccessor.HttpContext;
-            bool isLocalhost = httpContext.Request.Host.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-                               || IPAddress.IsLoopback(httpContext.Connection.RemoteIpAddress);
-
-            string ipAddress = isLocalhost ? "94.249.3.50" : httpContext.Connection.RemoteIpAddress.ToString();
-            var locationResponse = JsonConvert.DeserializeObject<LocationResponse>(GetLocation(ipAddress));
-
-            // Determine device model
-            string deviceModel = null;
-            if (source == 2)
-            {
-                var userAgent = httpContext.Request.Headers["User-Agent"].ToString().ToLower();
-                if (userAgent.Contains("android"))
-                {
-                    deviceModel = "Android";
-                }
-                else if (userAgent.Contains("iphone"))
-                {
-                    deviceModel = "iPhone";
-                }
-                else
-                {
-                    deviceModel = "Unknown";
-                }
-            }
-
-            var sessionUser = new SignedInUsers
-            {
-                Created = DateTime.Now,
-                CreatedBy = user.Id,
-                LastUpd = DateTime.Now,
-                IPAddress = ipAddress,
-                Location = locationResponse.latitude + "," + locationResponse.longitude,
-                Country = locationResponse.country_name,
-                Region = locationResponse.country_capital,
-                Active = true,
-                SessionId = sessionId,
-                Source = source,
-                SessionKey = sessionKey,
-                DeviceModel = deviceModel
-            };
-
-            var sessionUserId = _domainRepo.CreateSignInUser(sessionUser);
-            return sessionUserId > 0;
-        }
-
-        public static string GetLocation(string ip)
-        {
-            var res = "";
-            WebRequest request = WebRequest.Create("https://api.ipgeolocation.io/ipgeo?apiKey=74b0f6256f674dfc9568c86e88c59680&ip=" + ip);
-            WebResponse response = request.GetResponse();
-            StreamReader stream = new StreamReader(response.GetResponseStream());
-            string line;
-            while ((line = stream.ReadLine()) != null)
-            {
-                res += line;
-            }
-            
-            return res;
-        }
-       
         public string GetEmailTemplate(string EmailTeamplateName)
         {
             try { 
@@ -826,17 +481,6 @@ namespace DomainServices.Services
             }
         }
         
-        bool ContainsArabicLetters(string input)
-        {
-            foreach (char c in input)
-            {
-                if (c >= '\u0600' && c <= '\u06FF')
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
         public List<Dictionary<string, object>> ExecuteListDictionary(string sql, SqlCommand cmd, string connectionString)
         {
             var result = new List<Dictionary<string, object>>();
@@ -904,56 +548,6 @@ namespace DomainServices.Services
             return sql.Trim();
         }
 
-        public string BuildSqlColumn(string expr, LoadDataFieldDto f)
-        {
-            return f.DataType switch
-            {
-                "Date" => $"convert(varchar, {expr}, 20) {f.FieldName},",
-                "DateTime" => $"CONVERT(VARCHAR, FORMAT({expr}, 'dd/MM/yyyy hh:mm tt')) {f.FieldName},",
-                "Time" => $"CONVERT(VARCHAR, FORMAT({expr}, 'hh:mm tt')) {f.FieldName},",
-                "Color" => $"{expr} color_{f.FieldName},",
-                "CheckBox" => $"{expr} check_{f.FieldName},",
-                "Decimal" => $"{expr} decimal_{f.FieldName},",
-                "InnerButton" => $"{expr} button_{f.FieldName},",
-                "Button" => $"{expr} button_{f.FieldName},",
-                "File" => $"{expr} file_{f.FieldName},",
-                _ => $"{expr} {f.FieldName},"
-            };
-        }
-        public string BuildSqlSearch(KeyValuePair<string, string> item, LoadDataFieldDto f, SqlCommand cmd)
-        {
-            string key = item.Key;
-            string val = item.Value;
-
-            bool isDate = key.EndsWith("_From") || key.EndsWith("_To");
-            string baseKey = isDate ? key.Split('_')[0] : key;
-
-            string column = f.IsCalc ? f.CalcExpression : $"{f.TableName}.{f.TableColumn}";
-            string sql = "";
-
-            if (isDate)
-            {
-                sql = $"{column} {(key.EndsWith("_From") ? ">=" : "<=")} @{key}";
-                cmd.Parameters.AddWithValue($"@{key}", val);
-            }
-            else if (f.DataType.ToLower() == "text")
-            {
-                sql = $"{column} LIKE @{key}";
-                cmd.Parameters.AddWithValue($"@{key}", $"%{val}%");
-            }
-            else if (f.DataType.ToLower() == "checkbox")
-            {
-                sql = $"{column} = @{key}";
-                cmd.Parameters.AddWithValue($"@{key}", val == "true" ? "1" : "0");
-            }
-            else
-            {
-                sql = $"{column} = @{key}";
-                cmd.Parameters.AddWithValue($"@{key}", val);
-            }
-
-            return (sql + " AND ");
-        }
         #endregion
     }
 }
