@@ -28,6 +28,11 @@ namespace DomainServices.Services
 
         public static string Decrypt(string encryptedText, string key)
         {
+            if (string.IsNullOrWhiteSpace(encryptedText))
+                throw new ArgumentException("Encrypted text cannot be null or empty", nameof(encryptedText));
+
+            if (string.IsNullOrWhiteSpace(key))
+                throw new ArgumentException("Encryption key cannot be null or empty", nameof(key));
             using (SHA256 sha256 = SHA256.Create())
             {
                 byte[] keyBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(key));

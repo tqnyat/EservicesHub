@@ -30,7 +30,7 @@ namespace DomainServices.Services
         private readonly ILocalResourceService _localResourceService;
         private readonly CoreData _coreData;
         private readonly DomainDBContext.DomainRepo _domainRepo;
-        private readonly SignInManager<Users> _signInManager;
+        private readonly ILogger<CoreServices> _logger;
 
         public CoreServices(
             UserManager<Users> userManager,
@@ -38,82 +38,91 @@ namespace DomainServices.Services
             ILocalResourceService localResourceService,
             CoreData coreData,
             DomainDBContext.DomainRepo domainRepo,
-            SignInManager<Users> signInManager)
+            ILogger<CoreServices> logger)
         {
             _userManager = userManager;
             _commonServices = commonServices;
             _localResourceService = localResourceService;
             _coreData = coreData;
             _domainRepo = domainRepo;
-            _signInManager = signInManager;
+            _logger = logger;
         }
         #region Methods
 
         public async Task<GetUserViewsResponse> IGetUserViewsAsync(ClaimsPrincipal currentUser)
         {
-            if (currentUser == null || !currentUser.Identity.IsAuthenticated)
-                _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
-
-            var username = currentUser.FindFirst("username")?.Value
-                           ?? throw new Exception("Invalid user context.");
-
-            var user = await _userManager.FindByNameAsync(username)
-                       ?? throw new Exception("User not found.");
-
-            string query = @"
-                SELECT DISTINCT 
-                    V.Id, 
-                    V.Type, 
-                    V.ViewStyle, 
-                    V.Name, 
-                    V.Title, 
-                    V.ViewSequence, 
-                    V.MainCategory, 
-                    V.ViewIcon, 
-                    PD.ReadOnly
-                FROM RolePermissions RP
-                INNER JOIN Permissions P ON RP.PermissionId = P.Id
-                INNER JOIN PermissionDetails PD ON P.Id = PD.ParentId
-                INNER JOIN Views V ON PD.ViewId = V.Id
-                WHERE RP.RoleId = @RoleId
-                ORDER BY V.ViewSequence;
-            ";
-
-            var list = new List<ViewListItemDto>();
-
-            using var conn = new SqlConnection(_commonServices.getConnectionString());
-            using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.Add("@RoleId", SqlDbType.Int).Value = user.RoleId;
-
-            await conn.OpenAsync();
-            using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
+            try
             {
-                list.Add(new ViewListItemDto
+                if (currentUser == null || !currentUser.Identity.IsAuthenticated)
+                    _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
+
+                var username = currentUser.FindFirst("username")?.Value
+                               ?? throw new Exception("Invalid user context.");
+
+                var user = await _userManager.FindByNameAsync(username)
+                           ?? throw new Exception("User not found.");
+
+                string query = @"
+                    SELECT DISTINCT 
+                        V.Id, 
+                        V.Type, 
+                        V.ViewStyle, 
+                        V.Name, 
+                        V.Title, 
+                        V.ViewSequence, 
+                        V.MainCategory, 
+                        V.ViewIcon, 
+                        PD.ReadOnly
+                    FROM RolePermissions RP
+                    INNER JOIN Permissions P ON RP.PermissionId = P.Id
+                    INNER JOIN PermissionDetails PD ON P.Id = PD.ParentId
+                    INNER JOIN Views V ON PD.ViewId = V.Id
+                    WHERE RP.RoleId = @RoleId
+                    ORDER BY V.ViewSequence;
+                ";
+
+                var list = new List<ViewListItemDto>();
+
+                using var conn = new SqlConnection(_commonServices.getConnectionString());
+                using var cmd = new SqlCommand(query, conn);
+                cmd.Parameters.Add("@RoleId", SqlDbType.Int).Value = user.RoleId;
+
+                await conn.OpenAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
                 {
-                    Id = reader.GetFieldValue<decimal>(reader.GetOrdinal("Id")),
-                    Type = reader.GetFieldValue<decimal>(reader.GetOrdinal("Type")),
-                    ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle"))
-                        ? null
-                        : reader.GetFieldValue<int>(reader.GetOrdinal("ViewStyle")),
-                    Name = reader.GetFieldValue<string>(reader.GetOrdinal("Name")),
-                    Title = _localResourceService.GetResource(reader.GetFieldValue<string>(reader.GetOrdinal("Title"))),
-                    ViewSequence = reader.GetFieldValue<decimal>(reader.GetOrdinal("ViewSequence")),
-                    MainCategory = reader.IsDBNull(reader.GetOrdinal("MainCategory"))
-                        ? null
-                        : reader.GetFieldValue<decimal>(reader.GetOrdinal("MainCategory")),
-                    ViewIcon = reader.GetFieldValue<string>(reader.GetOrdinal("ViewIcon")),
-                    ReadOnly = reader.GetFieldValue<bool>(reader.GetOrdinal("ReadOnly"))
-                });
-            }
+                    list.Add(new ViewListItemDto
+                    {
+                        Id = reader.GetFieldValue<decimal>(reader.GetOrdinal("Id")),
+                        Type = reader.GetFieldValue<decimal>(reader.GetOrdinal("Type")),
+                        ViewStyle = reader.IsDBNull(reader.GetOrdinal("ViewStyle"))
+                            ? null
+                            : reader.GetFieldValue<int>(reader.GetOrdinal("ViewStyle")),
+                        Name = reader.GetFieldValue<string>(reader.GetOrdinal("Name")),
+                        Title = _localResourceService.GetResource(reader.GetFieldValue<string>(reader.GetOrdinal("Title"))),
+                        ViewSequence = reader.GetFieldValue<decimal>(reader.GetOrdinal("ViewSequence")),
+                        MainCategory = reader.IsDBNull(reader.GetOrdinal("MainCategory"))
+                            ? null
+                            : reader.GetFieldValue<decimal>(reader.GetOrdinal("MainCategory")),
+                        ViewIcon = reader.GetFieldValue<string>(reader.GetOrdinal("ViewIcon")),
+                        ReadOnly = reader.GetFieldValue<bool>(reader.GetOrdinal("ReadOnly"))
+                    });
+                }
 
-            return new GetUserViewsResponse
+                _logger.LogInformation("User views fetched successfully.");
+                return new GetUserViewsResponse
+                {
+                    ListDetial = list,
+                    UserFullName = $"{user.FirstName} {user.LastName}",
+                    ApplicationTheme = user.ApplicationTheme
+                };
+            }
+            catch(Exception ex)
             {
-                ListDetial = list,
-                UserFullName = $"{user.FirstName} {user.LastName}",
-                ApplicationTheme = user.ApplicationTheme
-            };
+                _logger.LogError(ex, "Error in IGetUserViewsAsync: {Message}", ex.Message);
+                throw new Exception(ex.Message + " / " + ex.InnerException);
+            }
         }
 
         public async Task<LoadViewResponse> ILoadView(Dictionary<string, string> t, ClaimsPrincipal currentUser)

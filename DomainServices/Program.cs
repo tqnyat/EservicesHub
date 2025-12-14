@@ -12,7 +12,7 @@ using static DomainServices.Data.Repository.DomainDBContext;
 
 var builder = WebApplication.CreateBuilder(args);
 
-string EncryptionKey = Environment.GetEnvironmentVariable("EncryptionKey");
+string EncryptionKey = builder.Configuration["EncryptionKey"];
 
 // Add controllers + swagger
 builder.Services.AddControllers();
@@ -68,39 +68,41 @@ builder.Services.AddSingleton<IConfiguration>(builder.Configuration);
 // ----------------------------------------
 // NLog
 // ----------------------------------------
-builder.Logging.ClearProviders();
-builder.Logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
-builder.Host.ConfigureLogging(logging =>
-{
-    logging.ClearProviders();
-    logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
-}).UseNLog();
+//builder.Logging.ClearProviders();
+//builder.Logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
+//builder.Host.ConfigureLogging(logging =>
+//{
+//    logging.ClearProviders();
+//    logging.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Trace);
+//}).UseNLog();
 
 // ----------------------------------------
 // OpenIddict Validation 
 // ----------------------------------------
-var authServerUrl = builder.Configuration.GetValue<string>("AuthServer");
+var authServerUrl = builder.Configuration.GetValue<string>("AuthServer:BaseUrl");
 
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme =
+        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme =
+        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme;
+});
 
 builder.Services.AddOpenIddict()
     .AddValidation(options =>
     {
-        // URL of Project A — MUST END WITHOUT SLASH
         options.SetIssuer(authServerUrl);
 
-        // The audience MUST match the client_id used when issuing the access token.
-        // This is your resource server name.
-        options.AddEncryptionKey(new SymmetricSecurityKey(
-           Convert.FromBase64String("DRjd/GnduI3Efzen9V9BvbNUfc/VKgXltV7Kbk9sMkY=")));
+        options.AddAudiences("Eservice_Hub");
 
-        // Register the System.Net.Http integration.
+        options.AddEncryptionKey(new SymmetricSecurityKey(
+            Convert.FromBase64String("DRjd/GnduI3Efzen9V9BvbNUfc/VKgXltV7Kbk9sMkY=")));
+
         options.UseSystemNetHttp();
 
-        // Register the ASP.NET Core host.
         options.UseAspNetCore();
     });
-
-builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 
 builder.Services.AddAuthorization();
 
