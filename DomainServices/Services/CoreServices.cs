@@ -56,7 +56,7 @@ namespace DomainServices.Services
                 if (currentUser == null || !currentUser.Identity.IsAuthenticated)
                     _commonServices.ThrowMessageAsException("not Autherized or Session timeout", "401");
 
-                var username = currentUser.FindFirst("username")?.Value
+                var username = currentUser.FindFirst("preferred_username")?.Value
                                ?? throw new Exception("Invalid user context.");
 
                 var user = await _userManager.FindByNameAsync(username)
@@ -100,7 +100,7 @@ namespace DomainServices.Services
                             ? null
                             : reader.GetFieldValue<int>(reader.GetOrdinal("ViewStyle")),
                         Name = reader.GetFieldValue<string>(reader.GetOrdinal("Name")),
-                        Title = _localResourceService.GetResource(reader.GetFieldValue<string>(reader.GetOrdinal("Title"))),
+                        Title = _localResourceService.GetResource(reader.GetFieldValue<string>(reader.GetOrdinal("Title")), user.Language),
                         ViewSequence = reader.GetFieldValue<decimal>(reader.GetOrdinal("ViewSequence")),
                         MainCategory = reader.IsDBNull(reader.GetOrdinal("MainCategory"))
                             ? null
@@ -136,7 +136,7 @@ namespace DomainServices.Services
             if (!t.TryGetValue("viewName", out var viewName) || string.IsNullOrWhiteSpace(viewName))
                 throw new Exception("viewName is required");
 
-            var username = currentUser.FindFirst("username")?.Value;
+            var username = currentUser.FindFirst("preferred_username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             var lang = user.Language;
@@ -191,13 +191,13 @@ namespace DomainServices.Services
                     {
                         Seq = reader.GetFieldValue<decimal>(0),
                         ClientURL = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                        ViewTitle = reader.IsDBNull(2) ? "" : _localResourceService.GetResource(reader.GetString(2)) ?? "",
+                        ViewTitle = reader.IsDBNull(2) ? "" : _localResourceService.GetResource(reader.GetString(2), user.Language) ?? "",
                         ViewId = reader.GetFieldValue<decimal>(3),
                         ViewStyle = reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
                         ViewDataAccess = reader.GetInt32(5),
                         CompId = reader.GetFieldValue<decimal>(6),
                         CompName = reader.IsDBNull(7) ? "" : reader.GetString(7),
-                        CompTitle = reader.IsDBNull(8) ? "" : _localResourceService.GetResource(reader.GetString(8)) ?? "",
+                        CompTitle = reader.IsDBNull(8) ? "" : _localResourceService.GetResource(reader.GetString(8), user.Language) ?? "",
                         CompFieldId = reader.IsDBNull(9) ? null : reader.GetDecimal(9),
                         ParCompId = reader.IsDBNull(10) ? null : reader.GetDecimal(10),
                         ParCompFieldId = reader.IsDBNull(11) ? null : reader.GetDecimal(11),
@@ -260,6 +260,8 @@ namespace DomainServices.Services
                 string.IsNullOrWhiteSpace(componentName))
                 throw new Exception("componentName is required");
 
+            var username = currentUser.FindFirst("preferred_username")?.Value;
+            var user = await _userManager.FindByNameAsync(username);
             // ---------------------------------------
             // 2. SQL
             // ---------------------------------------
@@ -292,7 +294,7 @@ namespace DomainServices.Services
                 var dto = new ListDetialDto
                 {
                     ComponentName = reader["ComponentName"]?.ToString() ?? "",
-                    ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? "") ?? "",
+                    ComponentTitle = _localResourceService.GetResource(reader["ComponentTitle"]?.ToString() ?? "", user.Language) ?? "",
                     PageSize = reader["PageSize"] == DBNull.Value ? 10 : Convert.ToInt32(reader["PageSize"]),
 
                     Id = reader.GetInt32(reader.GetOrdinal("Id")),
@@ -311,7 +313,7 @@ namespace DomainServices.Services
 
                     Name = reader["Name"]?.ToString(),
                     TableName = reader["TableName"]?.ToString(),
-                    Lable = _localResourceService.GetResource(reader["Lable"]?.ToString() ?? "") ?? "",
+                    Lable = _localResourceService.GetResource((reader["Lable"]?.ToString() ?? ""), user.Language) ?? "",
                     ColumnName = reader["ColumnName"]?.ToString(),
                     DataType = reader["DataType"]?.ToString(),
                     DefaultValue = reader["DefaultValue"]?.ToString(),
@@ -362,7 +364,7 @@ namespace DomainServices.Services
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            var username = currentUser.FindFirst("username")?.Value;
+            var username = currentUser.FindFirst("preferred_username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             var componentName = t.ComponentName ?? "";
@@ -593,7 +595,7 @@ namespace DomainServices.Services
             // ------------------------------------------------------------
             // 2. Resolve Current User
             // ------------------------------------------------------------
-            var username = currentUser.FindFirst("username")?.Value;
+            var username = currentUser.FindFirst("preferred_username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             // ------------------------------------------------------------
@@ -884,7 +886,7 @@ namespace DomainServices.Services
             // ---------------------------------------------------------
             // 3. Get user + component
             // ---------------------------------------------------------
-            var username = currentUser.FindFirst("username")?.Value;
+            var username = currentUser.FindFirst("preferred_username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             var viewItem = coreViewList.FirstOrDefault(x => x.CompName == componentName);
@@ -937,7 +939,7 @@ namespace DomainServices.Services
             string componentName = t.ComponentName ?? "";
             string selectedId = t.SelectedId ?? "-1";
 
-            var username = currentUser.FindFirst("username")?.Value;
+            var username = currentUser.FindFirst("preferred_username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             // -------------------------------------------------
@@ -1072,7 +1074,7 @@ namespace DomainServices.Services
             if (currentUser?.Identity?.IsAuthenticated != true)
                 _commonServices.ThrowMessageAsException("not Authorized or Session timeout", "401");
 
-            var username = currentUser.FindFirst("username")?.Value;
+            var username = currentUser.FindFirst("preferred_username")?.Value;
             var user = await _userManager.FindByNameAsync(username);
 
             //------------------------------------------------------------
@@ -1308,7 +1310,7 @@ namespace DomainServices.Services
                     // Prevent further invitations if the count is already 5 and it's been less than 5 minutes
                     TimeSpan waitTimeRemaining = TimeSpan.FromMinutes(5) - timeSinceLastAttempt;
                     string waitTimeMessage = string.Format(
-                        _localResourceService.GetResource("System.Message.SendCredintialsCountError"),
+                        _localResourceService.GetResource("System.Message.SendCredintialsCountError", user.Language),
                         Math.Ceiling(waitTimeRemaining.TotalMinutes)
                     );
                     return Ok(new { Status = "Failed", Message = waitTimeMessage });
@@ -1335,7 +1337,7 @@ namespace DomainServices.Services
             string password = _commonServices.GenerateRandomPassword();
             if (user.Status == 1)
             {
-                return Ok(new { Status = "UserActive", Message = _localResourceService.GetResource("System.Message.UserActive") });
+                return Ok(new { Status = "UserActive", Message = _localResourceService.GetResource("System.Message.UserActive", user.Language) });
             }
 
             var code = _userManager.GeneratePasswordResetTokenAsync(user).Result;
@@ -1348,7 +1350,7 @@ namespace DomainServices.Services
                 var SendCredentialsEmailTemplate = _commonServices.GetEmailTemplate("SendCredentialsEmailTemplate");
                 var siteURL = _commonServices.IGetSettingValue("SiteURL");
                 var htmlBody = string.Format(SendCredentialsEmailTemplate, user.UserName, password, siteURL);
-                var EmailText = string.Format(EmailBody, user.FirstName + " " + user.LastName, "", DateTime.Now, "", "", "", "", siteURL, htmlBody, "ACCOUNT", "display:none", _localResourceService.GetResource("Message.Title.TileEmail"));
+                var EmailText = string.Format(EmailBody, user.FirstName + " " + user.LastName, "", DateTime.Now, "", "", "", "", siteURL, htmlBody, "ACCOUNT", "display:none", _localResourceService.GetResource("Message.Title.TileEmail", user.Language));
 
                 //_emailSender.SendEmailAsync(user.Email, subject, EmailText);
                 if (user.SentCounts == 0)
@@ -1409,7 +1411,7 @@ namespace DomainServices.Services
                 var updateResult = _userManager.UpdateAsync(user).Result;
                 if (updateResult.Succeeded)
                 {
-                    return Ok(new { Status = "Success", Message = _localResourceService.GetResource("Email.Message.GenerateAndSendUser") });
+                    return Ok(new { Status = "Success", Message = _localResourceService.GetResource("Email.Message.GenerateAndSendUser", user.Language) });
                 }
                 else
                 {
@@ -1490,16 +1492,6 @@ namespace DomainServices.Services
             }
 
             return result;
-        }
-        private string DetectExportDataType(string originalName)
-        {
-            if (originalName.StartsWith("decimal_")) return "Decimal";
-            if (originalName.StartsWith("color_")) return "Color";
-            if (originalName.StartsWith("file_")) return "File";
-            if (originalName.StartsWith("check_")) return "CheckBox";
-            if (originalName.StartsWith("button_")) return "Button";
-
-            return "String";
         }
 
     }
