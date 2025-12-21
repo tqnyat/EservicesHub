@@ -415,7 +415,7 @@ namespace DomainServices.Services
                            ?? new Dictionary<string, List<Fields>>();
 
                 // take the first list inside the dictionary
-                fields = dict.Values.FirstOrDefault() ?? new List<Fields>();
+                fields = dict.Where(x => x.Key == componentName).FirstOrDefault().Value ?? new List<Fields>();
             }
 
 

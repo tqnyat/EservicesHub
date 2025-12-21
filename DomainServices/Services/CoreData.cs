@@ -933,12 +933,12 @@ namespace DomainServices.Services
                 ReadOnly, Required, DisplayInForm, DisplayInList,
                 IsCalc, CalcExpr, LookUp
             FROM ComponentField
-            WHERE ComponentId = (SELECT Id FROM Component WHERE Name = @Name)
+            WHERE ComponentId = (SELECT Id FROM Component WHERE Name = @CompName)
             ORDER BY DisplaySequence";
 
             cmd.Parameters.Clear();
-            cmd.Parameters.AddWithValue("@Name", component.Name);
-
+            cmd.Parameters.AddWithValue("@CompName", component.Name);
+            
             var rows = ExecuteListDictionary(sql, cmd, connectionString);
 
             var fields = rows.Select(r => new ComponentDetail
